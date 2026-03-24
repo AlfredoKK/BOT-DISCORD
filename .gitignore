@@ -1,0 +1,5 @@
+node_modules/
+.env
+data/google_token.json
+.pm2/
+*.log
