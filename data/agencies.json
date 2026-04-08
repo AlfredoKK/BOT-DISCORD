@@ -35,7 +35,8 @@
       "4": "09:30-18:30",
       "5": "09:30-18:30",
       "6": "09:30-18:30"
-    }
+    },
+    "paused": true
   },
   "tours": {
     "name": "TOURS",
@@ -168,8 +169,7 @@
       "4": "09:00-17:30",
       "5": "09:00-17:30",
       "6": "09:00-17:30"
-    },
-    "paused": true
+    }
   },
   "mulhouse": {
     "name": "MULHOUSE",
@@ -188,7 +188,8 @@
       "4": "09:30-19:30",
       "5": "09:30-19:30",
       "6": "09:30-16:00"
-    }
+    },
+    "paused": true
   },
   "merignac": {
     "name": "MERIGNAC",
@@ -252,20 +253,12 @@
     "name": "LA ROCHELLE",
     "calendar_id": "larochelle@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 2,
+    "max_rdv_heure": 3,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438059867377787",
     "sheet_name": "LA ROCHELLE",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:30-19:30",
-      "2": "09:30-19:30",
-      "3": "09:30-19:30",
-      "4": "09:30-19:30",
-      "5": "09:30-19:30",
-      "6": "09:30-19:30"
-    }
+    "paused": true
   },
   "la ciotat": {
     "name": "LA CIOTAT",
@@ -342,7 +335,8 @@
       "4": "09:00-19:30",
       "5": "09:00-19:30",
       "6": "09:00-19:30"
-    }
+    },
+    "paused": true
   },
   "douai": {
     "name": "DOUAI",
@@ -361,8 +355,7 @@
       "4": "09:30-19:00",
       "5": "09:30-19:00",
       "6": "09:30-19:00"
-    },
-    "paused": true
+    }
   },
   "colombes": {
     "name": "COLOMBES",
@@ -495,8 +488,7 @@
       "4": "09:00-19:30",
       "5": "09:00-19:30",
       "6": "09:00-19:30"
-    },
-    "paused": true
+    }
   },
   "colmar": {
     "name": "COLMAR",
@@ -532,20 +524,11 @@
     "name": "MAUBEUGE",
     "calendar_id": "tbmotorspro@gmail.com",
     "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
-    "max_rdv_heure": 2,
+    "max_rdv_heure": 3,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1443730771327189002",
-    "sheet_name": "MAUBEUGE",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "fermé",
-      "2": "10:00-19:30",
-      "3": "10:00-19:30",
-      "4": "10:00-19:30",
-      "5": "10:00-19:30",
-      "6": "10:00-18:30"
-    }
+    "sheet_name": "MAUBEUGE"
   },
   "perpignan": {
     "name": "PERPIGNAN",
@@ -632,6 +615,65 @@
     "timezone": "Europe/Paris",
     "channel_id": "1483901499582054462",
     "sheet_name": "ROANNE",
+    "opening_hours": {
+      "0": "fermé",
+      "1": "09:00-19:30",
+      "2": "09:00-19:30",
+      "3": "09:00-19:30",
+      "4": "09:00-19:30",
+      "5": "09:00-19:30",
+      "6": "09:00-19:30"
+    },
+    "paused": true
+  },
+  "st andre dlm": {
+    "name": "ST ANDRE DLM",
+    "calendar_id": "rmtopmarques@gmail.com",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 2,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1487578235016315031",
+    "sheet_name": "ST ANDRE DLM"
+  },
+  "santeny": {
+    "name": "SANTENY",
+    "calendar_id": "64f34884590b9d923587b8bab5d93df13bcec3f49317f1b3d5d228dcb354794d@group.calendar.google.com",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 2,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1487579513171873833",
+    "sheet_name": "SANTENY"
+  },
+  "valence": {
+    "name": "VALENCE",
+    "calendar_id": "valence@vroommarket.fr",
+    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
+    "max_rdv_heure": 1,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1491056162831994972",
+    "sheet_name": "VALENCE",
+    "opening_hours": {
+      "0": "fermé",
+      "1": "09:00-19:30",
+      "2": "09:00-19:30",
+      "3": "09:00-19:30",
+      "4": "09:00-19:30",
+      "5": "09:00-19:30",
+      "6": "09:00-19:30"
+    }
+  },
+  "rennes": {
+    "name": "RENNES",
+    "calendar_id": "rennes@vroommarket.fr",
+    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
+    "max_rdv_heure": 1,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1446438430148923484",
+    "sheet_name": "RENNES",
     "opening_hours": {
       "0": "fermé",
       "1": "09:00-19:30",

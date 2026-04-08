@@ -45,7 +45,8 @@ async function isSlotAvailable(calendarId, dateTime, maxRdvHeure) {
 
     // Exclude cancelled/vendu/no-show
     if (title.startsWith('ANNULÉ') || title.startsWith('ANNULE') ||
-        title.startsWith('PAS VENU') || title.startsWith('VENDU')) return false;
+        title.startsWith('PAS VENU') || title.startsWith('NO SHOW') ||
+        title.startsWith('VENDU')) return false;
 
     const evStart = new Date(ev.start.dateTime).getTime();
     const evEnd = ev.end && ev.end.dateTime

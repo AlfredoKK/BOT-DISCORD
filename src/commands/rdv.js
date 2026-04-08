@@ -947,9 +947,12 @@ async function handleCalendars(interaction) {
 
 // ── Pause / Play ──
 
+const ALLOWED_PLAY_PAUSE_USERS = ['1446485383729778749'];
+
 async function handlePause(interaction) {
   // Admin only — prospecteurs must NOT be able to pause agencies
-  if (!interaction.member.permissions.has('ManageGuild') && !interaction.member.permissions.has('Administrator')) {
+  const isAllowed = interaction.member.permissions.has('ManageGuild') || interaction.member.permissions.has('Administrator') || ALLOWED_PLAY_PAUSE_USERS.includes(interaction.user.id);
+  if (!isAllowed) {
     return interaction.reply({ content: 'Seuls les administrateurs peuvent mettre en pause une agence.', ephemeral: true });
   }
   await interaction.deferReply();
@@ -967,7 +970,8 @@ async function handlePause(interaction) {
 
 async function handlePlay(interaction) {
   // Admin only — prospecteurs must NOT be able to resume agencies
-  if (!interaction.member.permissions.has('ManageGuild') && !interaction.member.permissions.has('Administrator')) {
+  const isAllowed = interaction.member.permissions.has('ManageGuild') || interaction.member.permissions.has('Administrator') || ALLOWED_PLAY_PAUSE_USERS.includes(interaction.user.id);
+  if (!isAllowed) {
     return interaction.reply({ content: 'Seuls les administrateurs peuvent réactiver une agence.', ephemeral: true });
   }
   await interaction.deferReply();
