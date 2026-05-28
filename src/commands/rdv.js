@@ -7,8 +7,16 @@ const sheets = require('../services/sheets');
 const { COL } = sheets;
 const { isSlotAvailable, reserveSlot } = require('../services/capacity');
 const { parseDateTime, formatDate, formatTime, getConfType } = require('../utils/date-utils');
+const {
+  buildManagedRdvDescription,
+  getPrimaryStatusPrefix,
+  parseManagedRdvEvent,
+} = require('../utils/rdv-title');
 
 const AGENCIES_PATH = path.join(__dirname, '../../data/agencies.json');
+const RDV_DURATION_MINUTES = 60;
+const DOM_RDV_BUFFER_MINUTES = 15;  // 15min avant + 15min après
+const DOM_RDV_TOTAL_MINUTES = 90;   // total créneau bloqué = 1h30
 
 function loadAgencies() {
   if (!fs.existsSync(AGENCIES_PATH)) return {};
@@ -63,6 +71,21 @@ const data = new SlashCommandBuilder()
       .addStringOption((opt) => opt.setName('annee').setDescription('Année du véhicule').setRequired(true))
       .addStringOption((opt) => opt.setName('kilometrage').setDescription('Kilométrage').setRequired(true))
       .addStringOption((opt) => opt.setName('prix').setDescription('Prix').setRequired(true))
+      .addStringOption((opt) => opt.setName('liens').setDescription('Liens (optionnel)').setRequired(false))
+      .addStringOption((opt) => opt.setName('commentaire').setDescription('Commentaire / Notes (optionnel)').setRequired(false))
+  )
+  .addSubcommand((sub) =>
+    sub.setName('dom').setDescription('Ajouter un RDV à domicile (DOM) — créneau 1h30 avec ±15min buffer, couleur violette')
+      .addStringOption((opt) => opt.setName('date').setDescription('Date (JJ/MM/AAAA)').setRequired(true))
+      .addStringOption((opt) => opt.setName('heure').setDescription('Heure du RDV (HH:MM) — le créneau s\'affiche -15min sur l\'agenda').setRequired(true))
+      .addStringOption((opt) => opt.setName('nom_client').setDescription('Nom du client').setRequired(true))
+      .addStringOption((opt) => opt.setName('telephone').setDescription('Téléphone du client').setRequired(true))
+      .addStringOption((opt) => opt.setName('marque').setDescription('Marque du véhicule').setRequired(true))
+      .addStringOption((opt) => opt.setName('modele').setDescription('Modèle du véhicule').setRequired(true))
+      .addStringOption((opt) => opt.setName('annee').setDescription('Année du véhicule').setRequired(true))
+      .addStringOption((opt) => opt.setName('kilometrage').setDescription('Kilométrage').setRequired(true))
+      .addStringOption((opt) => opt.setName('prix').setDescription('Prix').setRequired(true))
+      .addStringOption((opt) => opt.setName('adresse').setDescription('Adresse du client (obligatoire pour DOM)').setRequired(true))
       .addStringOption((opt) => opt.setName('liens').setDescription('Liens (optionnel)').setRequired(false))
       .addStringOption((opt) => opt.setName('commentaire').setDescription('Commentaire / Notes (optionnel)').setRequired(false))
   )
@@ -146,43 +169,105 @@ async function execute(interaction) {
 
   try {
     switch (sub) {
-      case 'auth': return handleAuth(interaction);
-      case 'callback': return handleCallback(interaction);
-      case 'add': return handleAdd(interaction);
-      case 'annuler': return handleAnnuler(interaction);
-      case 'vendu': return handleVendu(interaction);
-      case 'conf': return handleConf(interaction);
-      case 'modifier': return handleModifier(interaction);
-      case 'supprimer': return handleSupprimer(interaction);
-      case 'status': return handleStatus(interaction);
-      case 'config': return handleConfig(interaction);
-      case 'deconfig': return handleDeconfig(interaction);
-      case 'agences': return handleAgences(interaction);
-      case 'calendars': return handleCalendars(interaction);
-      case 'pause': return handlePause(interaction);
-      case 'play': return handlePlay(interaction);
-      case 'horaires': return handleHoraires(interaction);
-      default: return interaction.reply({ content: 'Sous-commande inconnue.', ephemeral: true });
+      case 'auth': return await handleAuth(interaction);
+      case 'callback': return await handleCallback(interaction);
+      case 'add': return await handleAdd(interaction);
+      case 'dom': return await handleDom(interaction);
+      case 'annuler': return await handleAnnuler(interaction);
+      case 'vendu': return await handleVendu(interaction);
+      case 'conf': return await handleConf(interaction);
+      case 'modifier': return await handleModifier(interaction);
+      case 'supprimer': return await handleSupprimer(interaction);
+      case 'status': return await handleStatus(interaction);
+      case 'config': return await handleConfig(interaction);
+      case 'deconfig': return await handleDeconfig(interaction);
+      case 'agences': return await handleAgences(interaction);
+      case 'calendars': return await handleCalendars(interaction);
+      case 'pause': return await handlePause(interaction);
+      case 'play': return await handlePlay(interaction);
+      case 'horaires': return await handleHoraires(interaction);
+      default: return await interaction.reply({ content: 'Sous-commande inconnue.', ephemeral: true });
     }
   } catch (err) {
     console.error(`Error in /rdv ${sub}:`, err);
     const msg = `Erreur: ${err.message}`;
-    if (interaction.deferred || interaction.replied) {
-      return interaction.editReply({ content: msg });
+    try {
+      if (interaction.deferred || interaction.replied) {
+        return await interaction.editReply({ content: msg });
+      }
+      return await interaction.reply({ content: msg, ephemeral: true });
+    } catch (replyErr) {
+      console.error(`Error replying for /rdv ${sub}:`, replyErr);
     }
-    return interaction.reply({ content: msg, ephemeral: true });
   }
 }
 
 // ── Helpers ──
 
-function findSheetRowByEventId(rows, eventId) {
+function normalizeMatchText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase();
+}
+
+function normalizePhone(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function scoreSheetRowForEvent(row, eventData) {
+  if (!eventData) return 0;
+
+  const details = parseManagedRdvEvent(eventData);
+  const startDt = eventData.start?.dateTime ? new Date(eventData.start.dateTime) : null;
+  let score = 0;
+
+  if (details.nomClient && normalizeMatchText(row[COL.CLIENT]) === normalizeMatchText(details.nomClient)) {
+    score += 5;
+  }
+
+  if (details.telephone && normalizePhone(row[COL.TELEPHONE]) === normalizePhone(details.telephone)) {
+    score += 4;
+  }
+
+  if (startDt && row[COL.DATE] === formatDate(startDt)) {
+    score += 3;
+  }
+
+  if (startDt && row[COL.HEURE] === formatTime(startDt)) {
+    score += 2;
+  }
+
+  const rowStatus = normalizeMatchText(row[COL.STATUT]);
+  if (rowStatus === 'PLANIFIE' || rowStatus === 'PLANIFIÉ') {
+    score += 1;
+  }
+
+  return score;
+}
+
+function findSheetRowByEventId(rows, eventId, eventData = null) {
+  const matches = [];
   for (let i = 0; i < rows.length; i++) {
     if (rows[i][COL.EVENT_ID] === eventId) {
-      return { index: i, row: rows[i] };
+      matches.push({ index: i, row: rows[i] });
     }
   }
-  return null;
+
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0];
+
+  const ranked = matches
+    .map((match) => ({ ...match, score: scoreSheetRowForEvent(match.row, eventData) }))
+    .sort((a, b) => b.score - a.score || b.index - a.index);
+
+  const best = ranked[0];
+  console.warn(
+    `[SHEETS] Duplicate event ID ${eventId} found on rows ${matches.map((m) => m.index + 1).join(', ')}. Chosen row ${best.index + 1} (score ${best.score}).`
+  );
+  return { index: best.index, row: best.row };
 }
 
 const JOUR_NAMES = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
@@ -203,11 +288,12 @@ function isWithinOpeningHours(agency, dateTime) {
   const [closeH, closeM] = closeStr.split(':').map(Number);
 
   const rdvMinutes = dateTime.getHours() * 60 + dateTime.getMinutes();
+  const rdvEndMinutes = rdvMinutes + RDV_DURATION_MINUTES;
   const openMinutes = openH * 60 + openM;
   const closeMinutes = closeH * 60 + closeM;
 
-  if (rdvMinutes < openMinutes || rdvMinutes >= closeMinutes) {
-    return { open: false, reason: `L'agence **${agency.name}** est ouverte de ${openStr} à ${closeStr} le ${JOUR_NAMES[dayOfWeek]}.` };
+  if (rdvMinutes < openMinutes || rdvEndMinutes > closeMinutes) {
+    return { open: false, reason: `L'agence **${agency.name}** accepte des RDV de ${openStr} à ${closeStr} le ${JOUR_NAMES[dayOfWeek]}. Un RDV d'1h doit se terminer avant la fermeture.` };
   }
 
   return { open: true };
@@ -227,20 +313,68 @@ function buildEventTitle(prefix, nomClient, telephone, marque, modele, annee, ki
     `${cleanKm} KM`,
     `${cleanPrix}€`,
   ];
-  if (liens) parts.push(liens);
-  if (commentaire) parts.push(commentaire.toUpperCase());
   return parts.join(' - ');
+}
+
+function getPreservedCalendarPrefix(sheetRow, fallbackTitle) {
+  const sheetStatus = String(sheetRow?.[COL.STATUT] || '').trim().toUpperCase();
+  const sheetConfirmation = String(sheetRow?.[COL.CONFIRMATION] || '').trim().toUpperCase();
+
+  if (sheetStatus === 'ANNULÉ' || sheetStatus === 'ANNULE') return 'ANNULÉ';
+  if (sheetStatus === 'VENDU') return 'VENDU';
+  if (sheetStatus === 'PAS VENU' || sheetStatus === 'NO SHOW') return 'PAS VENU';
+
+  if (sheetConfirmation === 'NON CONF') return 'NON CONF';
+  if (sheetConfirmation === 'CONF') return 'CONF';
+  if (sheetConfirmation === 'J/J') return 'J/J';
+
+  return getPrimaryStatusPrefix(fallbackTitle);
+}
+
+function isEventDomRdv(eventData) {
+  return /\bRDV MANDAT DOM\b/i.test(String(eventData?.summary || ''));
+}
+
+function buildCanonicalManagedEventPayload(details, prefix, isDom = false) {
+  const rdvType = isDom ? 'RDV MANDAT DOM' : 'RDV MANDAT';
+  const baseTitle = buildEventTitle(
+    rdvType,
+    details.nomClient || '',
+    details.telephone || '',
+    details.marque || '',
+    details.modele || '',
+    details.annee || '',
+    details.kilometrage || '',
+    details.prix || '',
+    details.liens || '',
+    details.commentaire || ''
+  );
+  const description = buildManagedRdvDescription(details.liens, details.commentaire, details.adresse);
+  return {
+    summary: prefix ? `${prefix} - ${baseTitle}` : baseTitle,
+    description: description || undefined,
+  };
+}
+
+function truncateForEmbed(value, maxLength = 1024) {
+  const text = String(value ?? '');
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1)}…`;
 }
 
 function buildRdvEmbed(title, color, fields) {
   const embed = new EmbedBuilder()
-    .setTitle(title)
+    .setTitle(truncateForEmbed(title, 256))
     .setColor(color)
     .setTimestamp();
 
   for (const f of fields) {
     if (f.value) {
-      embed.addFields({ name: f.name, value: String(f.value), inline: f.inline !== false });
+      embed.addFields({
+        name: truncateForEmbed(f.name, 256),
+        value: truncateForEmbed(f.value, 1024),
+        inline: f.inline !== false,
+      });
     }
   }
 
@@ -303,23 +437,32 @@ async function handleAdd(interaction) {
   }
 
   // Check capacity
-  const slot = await isSlotAvailable(agency.calendar_id, dateTime, agency.max_rdv_heure);
+  const slot = await isSlotAvailable(agency, dateTime);
   if (!slot.available) {
-    return interaction.editReply(`Créneau complet ! (${slot.count}/${slot.max} RDV sur ce créneau)`);
+    return interaction.editReply(slot.reason || `Créneau complet ! (${slot.count}/${slot.max} RDV sur ce créneau)`);
   }
+
+  const confType = getConfType(dateTime);
+  const isJ1MorningAutoConf = confType === 'J+1' && dateTime.getHours() < 12;
+  const sheetConfType = isJ1MorningAutoConf ? 'CONF' : confType;
 
   // Reserve slot to prevent race conditions with concurrent bookings
   const release = reserveSlot(agency.calendar_id, dateTime);
 
   let eventId = '';
   try {
-    // Build title
-    const eventTitle = buildEventTitle('RDV MANDAT', nomClient, telephone, marque, modele, annee, kilometrage, prix, liens, commentaire);
+    // Build title — add J/J or CONF prefix when applicable
+    const baseTitle = buildEventTitle('RDV MANDAT', nomClient, telephone, marque, modele, annee, kilometrage, prix, liens, commentaire);
+    const description = buildManagedRdvDescription(liens, commentaire);
+    let calendarPrefix = null;
+    if (confType === 'J/J') calendarPrefix = 'J/J';
+    else if (isJ1MorningAutoConf) calendarPrefix = 'CONF';
+    const calTitle = calendarPrefix ? `${calendarPrefix} - ${baseTitle}` : baseTitle;
 
     // Create calendar event
     const eventRes = await calendar.createEvent(agency.calendar_id, {
-      summary: eventTitle,
-      description: liens || undefined,
+      summary: calTitle,
+      description: description || undefined,
       start: dateTime,
       end: endTime,
       colorId: calendar.EVENT_COLORS.green,
@@ -332,10 +475,9 @@ async function handleAdd(interaction) {
 
   // Add to sheet
   const vehicule = modele.toUpperCase();
-  const confType = getConfType(dateTime);
   const prospecteur = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
   // Store normalized date/time (not raw input) so sheets always show DD/MM/YYYY and HH:MM
-  const sheetRow = [prospecteur, vehicule, nomClient.toUpperCase(), "'" + telephone, formatDate(dateTime), formatTime(dateTime), confType, 'PLANIFIÉ', eventId, timestamp(), ''];
+  const sheetRow = [prospecteur, vehicule, nomClient.toUpperCase(), "'" + telephone, formatDate(dateTime), formatTime(dateTime), sheetConfType, 'PLANIFIÉ', eventId, timestamp(), ''];
 
   let sheetStatus = 'Synchronisé';
   try {
@@ -365,9 +507,110 @@ async function handleAdd(interaction) {
     { name: 'Sheets', value: sheetStatus, inline: false },
   ]);
 
-  if (confType) {
-    embed.setFooter({ text: confType });
+  if (sheetConfType) {
+    embed.setFooter({ text: sheetConfType });
   }
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+// ── Dom ──
+
+async function handleDom(interaction) {
+  await interaction.deferReply();
+  const agency = requireAgency(interaction);
+  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence. Utilisez `/rdv config` ici d\'abord.');
+
+  if (!agency.dom_rdv_enabled) {
+    return interaction.editReply('🚫 La fonctionnalité RDV à domicile n\'est pas activée pour cette agence.');
+  }
+
+  if (agency.paused) {
+    return interaction.editReply(`⏸️ L'agence **${agency.name}** est actuellement en pause. Aucun RDV ne peut être ajouté.`);
+  }
+
+  const dateStr = interaction.options.getString('date');
+  const heureStr = interaction.options.getString('heure');
+  const nomClient = interaction.options.getString('nom_client');
+  const telephone = interaction.options.getString('telephone');
+  const marque = interaction.options.getString('marque');
+  const modele = interaction.options.getString('modele');
+  const annee = interaction.options.getString('annee');
+  const kilometrage = interaction.options.getString('kilometrage');
+  const prix = interaction.options.getString('prix');
+  const adresse = interaction.options.getString('adresse');
+  const liens = interaction.options.getString('liens') || '';
+  const commentaire = interaction.options.getString('commentaire') || '';
+
+  // rdvTime = heure saisie par l'utilisateur (ex: 15h00)
+  // startTime = rdvTime - 15min (ex: 14h45) → affiché sur l'agenda
+  // endTime   = rdvTime + 75min (ex: 16h15) → total créneau = 1h30
+  const rdvTime = parseDateTime(dateStr, heureStr);
+  const startTime = new Date(rdvTime.getTime() - DOM_RDV_BUFFER_MINUTES * 60000);
+  const endTime = new Date(rdvTime.getTime() + (DOM_RDV_TOTAL_MINUTES - DOM_RDV_BUFFER_MINUTES) * 60000);
+
+  const confType = getConfType(rdvTime);
+  const isJ1MorningAutoConf = confType === 'J+1' && rdvTime.getHours() < 12;
+  const sheetConfType = isJ1MorningAutoConf ? 'CONF' : confType;
+
+  const baseTitle = buildEventTitle('RDV MANDAT DOM', nomClient, telephone, marque, modele, annee, kilometrage, prix, liens, commentaire);
+  const description = buildManagedRdvDescription(liens, commentaire, adresse);
+
+  let calendarPrefix = null;
+  if (confType === 'J/J') calendarPrefix = 'J/J';
+  else if (isJ1MorningAutoConf) calendarPrefix = 'CONF';
+  const calTitle = calendarPrefix ? `${calendarPrefix} - ${baseTitle}` : baseTitle;
+
+  let eventId = '';
+  try {
+    const eventRes = await calendar.createEvent(agency.calendar_id, {
+      summary: calTitle,
+      description: description || undefined,
+      start: startTime,
+      end: endTime,
+      colorId: calendar.EVENT_COLORS.grape,
+    });
+    eventId = eventRes.data.id || '';
+    console.log(`[DOM] Calendar event created: ${eventId}`);
+  } catch (calErr) {
+    console.error(`[DOM] Calendar create failed:`, calErr.message);
+    throw calErr;
+  }
+
+  const vehicule = modele.toUpperCase();
+  const prospecteur = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
+  const sheetRow = [prospecteur, vehicule, nomClient.toUpperCase(), "'" + telephone, formatDate(rdvTime), heureStr, sheetConfType, 'PLANIFIÉ', eventId, timestamp(), ''];
+
+  let sheetStatus = 'Synchronisé';
+  try {
+    await sheets.appendRow(agency.spreadsheet_id, sheetRow, agency.sheet_name);
+    console.log(`[DOM] Sheet row appended`);
+  } catch (sheetErr) {
+    console.error(`[DOM] Sheet append FAILED:`, sheetErr.message);
+    sheetStatus = `Erreur: ${sheetErr.message}`;
+  }
+
+  const calLink = getCalendarLink(eventId, agency.calendar_id);
+
+  const embed = buildRdvEmbed('RDV DOM créé', 0x8E24AA, [
+    { name: 'Date', value: dateStr },
+    { name: 'Heure RDV', value: heureStr },
+    { name: 'Créneau agenda', value: `${formatTime(startTime)} → ${formatTime(endTime)}`, inline: false },
+    { name: 'Agence', value: agency.name },
+    { name: 'Client', value: nomClient.toUpperCase() },
+    { name: 'Téléphone', value: telephone },
+    { name: 'Adresse', value: adresse, inline: false },
+    { name: 'Véhicule', value: `${marque.toUpperCase()} ${modele.toUpperCase()} (${annee})` },
+    { name: 'Kilométrage', value: `${kilometrage} KM` },
+    { name: 'Prix', value: `${prix}€` },
+    { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
+    { name: 'Lien', value: liens || 'Aucun', inline: false },
+    { name: 'Notes', value: commentaire || 'Aucune', inline: false },
+    { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
+    { name: 'Sheets', value: sheetStatus, inline: false },
+  ]);
+
+  if (sheetConfType) embed.setFooter({ text: sheetConfType });
 
   await interaction.editReply({ embeds: [embed] });
 }
@@ -402,18 +645,14 @@ async function handleAnnuler(interaction) {
 
   // Update calendar title + color
   try {
-    const oldTitle = eventData.summary || '';
-    if (!oldTitle.startsWith('ANNULÉ')) {
-      const cleaned = oldTitle.replace(/^RDV MANDAT - /, '');
-      await calendar.updateEvent(agency.calendar_id, eventId, {
-        summary: `ANNULÉ - ${cleaned}`,
-        colorId: calendar.EVENT_COLORS.orange,
-      });
-    } else {
-      await calendar.updateEvent(agency.calendar_id, eventId, {
-        colorId: calendar.EVENT_COLORS.orange,
-      });
-    }
+    const currentDetails = parseManagedRdvEvent(eventData);
+    const isDom = isEventDomRdv(eventData);
+    const payload = buildCanonicalManagedEventPayload(currentDetails, 'ANNULÉ', isDom);
+    await calendar.updateEvent(agency.calendar_id, eventId, {
+      summary: payload.summary,
+      description: payload.description,
+      colorId: calendar.EVENT_COLORS.red,
+    });
     console.log(`[ANNULER] Calendar event ${eventId} updated`);
   } catch (calErr) {
     console.error(`[ANNULER] Calendar failed:`, calErr.message);
@@ -424,7 +663,7 @@ async function handleAnnuler(interaction) {
   let sheetRow = null;
   try {
     const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
-    const found = findSheetRowByEventId(rows, eventId);
+    const found = findSheetRowByEventId(rows, eventId, eventData);
     if (found) {
       sheetRow = found.row;
       found.row[COL.STATUT] = 'ANNULÉ';
@@ -435,8 +674,7 @@ async function handleAnnuler(interaction) {
     console.error(`[ANNULER] Sheet failed:`, e.message);
   }
 
-  // Parse event title for embed details
-  const titleParts = (eventData.summary || '').split(' - ');
+  const currentDetails = parseManagedRdvEvent(eventData);
   const startDt = eventData.start?.dateTime ? new Date(eventData.start.dateTime) : null;
 
   const calLink = getCalendarLink(eventId, agency.calendar_id);
@@ -444,9 +682,9 @@ async function handleAnnuler(interaction) {
     { name: 'Date', value: startDt ? formatDate(startDt) : (sheetRow?.[COL.DATE] || '—') },
     { name: 'Heure', value: startDt ? formatTime(startDt) : (sheetRow?.[COL.HEURE] || '—') },
     { name: 'Agence', value: agency.name },
-    { name: 'Client', value: sheetRow?.[COL.CLIENT] || titleParts[1] || '—' },
-    { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || titleParts[2] || '—' },
-    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || `${titleParts[3] || ''} ${titleParts[4] || ''} (${titleParts[5] || ''})`.trim() || '—' },
+    { name: 'Client', value: sheetRow?.[COL.CLIENT] || currentDetails.nomClient || '—' },
+    { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || currentDetails.telephone || '—' },
+    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || `${currentDetails.marque || ''} ${currentDetails.modele || ''} (${currentDetails.annee || ''})`.trim() || '—' },
     { name: 'Statut', value: 'ANNULÉ' },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
@@ -477,18 +715,14 @@ async function handleVendu(interaction) {
 
   // Update calendar title + color
   try {
-    const oldTitle = eventData.summary || '';
-    if (!oldTitle.startsWith('VENDU')) {
-      const cleaned = oldTitle.replace(/^RDV MANDAT - /, '').replace(/^ANNULÉ - /, '').replace(/^PAS VENU - /, '');
-      await calendar.updateEvent(agency.calendar_id, eventId, {
-        summary: `VENDU - ${cleaned}`,
-        colorId: calendar.EVENT_COLORS.orange,
-      });
-    } else {
-      await calendar.updateEvent(agency.calendar_id, eventId, {
-        colorId: calendar.EVENT_COLORS.orange,
-      });
-    }
+    const currentDetails = parseManagedRdvEvent(eventData);
+    const isDom = isEventDomRdv(eventData);
+    const payload = buildCanonicalManagedEventPayload(currentDetails, 'VENDU', isDom);
+    await calendar.updateEvent(agency.calendar_id, eventId, {
+      summary: payload.summary,
+      description: payload.description,
+      colorId: calendar.EVENT_COLORS.orange,
+    });
     console.log(`[VENDU] Calendar event ${eventId} updated`);
   } catch (calErr) {
     console.error(`[VENDU] Calendar failed:`, calErr.message);
@@ -499,7 +733,7 @@ async function handleVendu(interaction) {
   let sheetRow = null;
   try {
     const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
-    const found = findSheetRowByEventId(rows, eventId);
+    const found = findSheetRowByEventId(rows, eventId, eventData);
     if (found) {
       sheetRow = found.row;
       found.row[COL.STATUT] = 'VENDU';
@@ -510,8 +744,7 @@ async function handleVendu(interaction) {
     console.error(`[VENDU] Sheet failed:`, e.message);
   }
 
-  // Parse event title for embed details
-  const titleParts = (eventData.summary || '').split(' - ');
+  const currentDetails = parseManagedRdvEvent(eventData);
   const startDt = eventData.start?.dateTime ? new Date(eventData.start.dateTime) : null;
 
   const calLink = getCalendarLink(eventId, agency.calendar_id);
@@ -519,9 +752,9 @@ async function handleVendu(interaction) {
     { name: 'Date', value: startDt ? formatDate(startDt) : (sheetRow?.[COL.DATE] || '—') },
     { name: 'Heure', value: startDt ? formatTime(startDt) : (sheetRow?.[COL.HEURE] || '—') },
     { name: 'Agence', value: agency.name },
-    { name: 'Client', value: sheetRow?.[COL.CLIENT] || titleParts[1] || '—' },
-    { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || titleParts[2] || '—' },
-    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || `${titleParts[3] || ''} ${titleParts[4] || ''} (${titleParts[5] || ''})`.trim() || '—' },
+    { name: 'Client', value: sheetRow?.[COL.CLIENT] || currentDetails.nomClient || '—' },
+    { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || currentDetails.telephone || '—' },
+    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || `${currentDetails.marque || ''} ${currentDetails.modele || ''} (${currentDetails.annee || ''})`.trim() || '—' },
     { name: 'Statut', value: 'VENDU' },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
@@ -555,7 +788,7 @@ async function handleConf(interaction) {
   let sheetRow = null;
   try {
     const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
-    const found = findSheetRowByEventId(rows, eventId);
+    const found = findSheetRowByEventId(rows, eventId, eventData);
     if (!found) {
       return interaction.editReply(`Aucun RDV trouvé avec l'ID \`${eventId}\` dans le Sheets.`);
     }
@@ -570,7 +803,22 @@ async function handleConf(interaction) {
     return interaction.editReply(`Erreur: ${e.message}`);
   }
 
-  const titleParts = (eventData.summary || '').split(' - ');
+  // Update calendar title only — no color change
+  try {
+    const currentDetails = parseManagedRdvEvent(eventData);
+    const isDom = isEventDomRdv(eventData);
+    const payload = buildCanonicalManagedEventPayload(currentDetails, confStatut, isDom);
+    await calendar.updateEvent(agency.calendar_id, eventId, {
+      summary: payload.summary,
+      description: payload.description,
+    });
+    console.log(`[CONF] Calendar event ${eventId} updated to ${confStatut}`);
+  } catch (calErr) {
+    console.error(`[CONF] Calendar update failed:`, calErr.message);
+    // Non-fatal: sheet already updated, just warn in reply
+  }
+
+  const currentDetails = parseManagedRdvEvent(eventData);
   const startDt = eventData.start?.dateTime ? new Date(eventData.start.dateTime) : null;
   const calLink = getCalendarLink(eventId, agency.calendar_id);
   const isConf = confStatut === 'CONF';
@@ -579,9 +827,9 @@ async function handleConf(interaction) {
     { name: 'Date', value: startDt ? formatDate(startDt) : (sheetRow?.[COL.DATE] || '—') },
     { name: 'Heure', value: startDt ? formatTime(startDt) : (sheetRow?.[COL.HEURE] || '—') },
     { name: 'Agence', value: agency.name },
-    { name: 'Client', value: sheetRow?.[COL.CLIENT] || titleParts[1] || '—' },
-    { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || titleParts[2] || '—' },
-    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || '—' },
+    { name: 'Client', value: sheetRow?.[COL.CLIENT] || currentDetails.nomClient || '—' },
+    { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || currentDetails.telephone || '—' },
+    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || `${currentDetails.marque || ''} ${currentDetails.modele || ''} (${currentDetails.annee || ''})`.trim() || '—' },
     { name: 'Confirmation', value: confStatut },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
@@ -610,32 +858,29 @@ async function handleModifier(interaction) {
     return interaction.editReply(`Événement introuvable: \`${eventId}\``);
   }
 
-  // Parse current title — strip status prefixes first
-  let workTitle = (currentEvent.summary || '');
-  // Remove status prefixes: "ANNULÉ - RDV MANDAT - ..." → "RDV MANDAT - ..."
-  // Also handle: "PAS VENU - RDV MANDAT - ...", "VENDU - RDV MANDAT - ..."
-  for (const statusPrefix of ['ANNULÉ - ', 'PAS VENU - ', 'VENDU - ']) {
-    if (workTitle.toUpperCase().startsWith(statusPrefix)) {
-      workTitle = workTitle.substring(statusPrefix.length);
-      break;
-    }
+  let currentSheetRow = null;
+  try {
+    const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
+    currentSheetRow = findSheetRowByEventId(rows, eventId, currentEvent);
+  } catch (sheetErr) {
+    console.error(`[MODIFIER] Sheet prefetch failed:`, sheetErr.message);
   }
-  // Now also remove "RDV MANDAT - " prefix to get to the data parts
-  const titleParts = workTitle.split(' - ');
-  let prefix = 'RDV MANDAT'; // Always reset to RDV MANDAT on modifier (rebook)
-  let dataStart = 0;
-  if (titleParts[0] && titleParts[0].toUpperCase().includes('RDV MANDAT')) {
-    dataStart = 1; // skip "RDV MANDAT" prefix
+
+  if (!currentSheetRow) {
+    return interaction.editReply(`Aucun RDV trouvé avec l'ID \`${eventId}\` dans le Sheets. Modification bloquée pour éviter un décalage Calendar/Sheets.`);
   }
-  let curNom = titleParts[dataStart] || '';
-  let curTel = titleParts[dataStart + 1] || '';
-  let curMarque = titleParts[dataStart + 2] || '';
-  let curModele = titleParts[dataStart + 3] || '';
-  let curAnnee = titleParts[dataStart + 4] || '';
-  let curKm = (titleParts[dataStart + 5] || '').replace(' KM', '');
-  let curPrix = (titleParts[dataStart + 6] || '').replace('€', '');
-  let curLiens = titleParts[dataStart + 7] || '';
-  let curCommentaire = titleParts[dataStart + 8] || '';
+
+  const isDom = isEventDomRdv(currentEvent);
+  const currentDetails = parseManagedRdvEvent(currentEvent);
+  const curNom = currentDetails.nomClient;
+  const curTel = currentDetails.telephone;
+  const curMarque = currentDetails.marque;
+  const curModele = currentDetails.modele;
+  const curAnnee = currentDetails.annee;
+  const curKm = currentDetails.kilometrage;
+  const curPrix = currentDetails.prix;
+  const curLiens = currentDetails.liens;
+  const curCommentaire = currentDetails.commentaire;
 
   // Get optional new values
   const newNom = interaction.options.getString('nom_client') ? interaction.options.getString('nom_client').toUpperCase() : curNom;
@@ -649,90 +894,135 @@ async function handleModifier(interaction) {
   const newCommentaire = interaction.options.getString('commentaire') !== null ? (interaction.options.getString('commentaire') || '').toUpperCase() : curCommentaire;
 
   // Determine date/time
-  const currentStart = new Date(currentEvent.start.dateTime);
+  const currentStartRaw = currentEvent.start?.dateTime;
+  if (!currentStartRaw) {
+    return interaction.editReply('Impossible de modifier cet événement: heure de début introuvable dans Google Calendar.');
+  }
+
+  const currentStart = new Date(currentStartRaw);
   const nouvelleDateStr = interaction.options.getString('nouvelle_date');
   const nouvelleHeureStr = interaction.options.getString('nouvelle_heure');
+  const isRebook = Boolean(nouvelleDateStr || nouvelleHeureStr);
+
+  // Pour les RDV DOM, le calendrier démarre 15min AVANT l'heure RDV.
+  // rdvUserTime = l'heure affichée à l'utilisateur (ex: 15h00).
+  const rdvUserTime = isDom
+    ? new Date(currentStart.getTime() + DOM_RDV_BUFFER_MINUTES * 60000)
+    : currentStart;
 
   let newDateTime, newEndTime, newDateStr, newHeureStr;
-  if (nouvelleDateStr || nouvelleHeureStr) {
-    // Date/time is changing — parse and validate (including past-date check)
-    newDateStr = nouvelleDateStr || formatDate(currentStart);
-    newHeureStr = nouvelleHeureStr || formatTime(currentStart);
+  if (isRebook) {
+    newDateStr = nouvelleDateStr || formatDate(rdvUserTime);
+    newHeureStr = nouvelleHeureStr || formatTime(rdvUserTime);
     newDateTime = parseDateTime(newDateStr, newHeureStr);
     newEndTime = new Date(newDateTime.getTime() + 60 * 60000);
 
-    // Check opening hours
-    const hoursCheck = isWithinOpeningHours(agency, newDateTime);
-    if (!hoursCheck.open) {
-      return interaction.editReply(`🚫 ${hoursCheck.reason}`);
+    // Vérification horaires uniquement pour les RDV classiques
+    if (!isDom) {
+      const hoursCheck = isWithinOpeningHours(agency, newDateTime);
+      if (!hoursCheck.open) {
+        return interaction.editReply(`🚫 ${hoursCheck.reason}`);
+      }
     }
   } else {
-    // No date/time change — keep existing (even if in the past, for field-only edits)
-    newDateTime = currentStart;
-    newEndTime = new Date(currentStart.getTime() + 60 * 60000);
-    newDateStr = formatDate(currentStart);
-    newHeureStr = formatTime(currentStart);
+    // Pas de changement de date/heure — conserver l'heure RDV existante
+    newDateTime = rdvUserTime;
+    newEndTime = new Date(rdvUserTime.getTime() + 60 * 60000);
+    newDateStr = formatDate(rdvUserTime);
+    newHeureStr = formatTime(rdvUserTime);
   }
 
-  // Check capacity if date/time changed
-  if (nouvelleDateStr || nouvelleHeureStr) {
-    const slot = await isSlotAvailable(agency.calendar_id, newDateTime, agency.max_rdv_heure);
+  // Vérification capacité uniquement pour les RDV classiques (DOM = hors agence)
+  if (isRebook && !isDom) {
+    const slot = await isSlotAvailable(agency, newDateTime, { excludeEventId: eventId });
     if (!slot.available) {
-      return interaction.editReply(`Créneau complet pour le ${newDateStr} à ${newHeureStr} ! (${slot.count}/${slot.max})`);
+      return interaction.editReply(slot.reason || `Créneau complet pour le ${newDateStr} à ${newHeureStr} ! (${slot.count}/${slot.max})`);
     }
   }
 
-  const newTitle = buildEventTitle(prefix, newNom, newTel, newMarque, newModele, newAnnee, newKm, newPrix, newLiens, newCommentaire);
+  const rdvType = isDom ? 'RDV MANDAT DOM' : 'RDV MANDAT';
+  const baseTitle = buildEventTitle(rdvType, newNom, newTel, newMarque, newModele, newAnnee, newKm, newPrix, newLiens, newCommentaire);
+  const description = buildManagedRdvDescription(newLiens, newCommentaire, currentDetails.adresse);
+
+  let sheetConfType = currentSheetRow.row[COL.CONFIRMATION] || '';
+  let sheetStatus = currentSheetRow.row[COL.STATUT] || 'PLANIFIÉ';
+  let confPar = currentSheetRow.row[COL.CONF_PAR] || '';
+  let calendarPrefix = getPreservedCalendarPrefix(currentSheetRow.row, currentEvent.summary || '');
+  let colorId = currentEvent.colorId || calendar.EVENT_COLORS.green;
+
+  if (isRebook) {
+    const confType = getConfType(newDateTime);
+    const isJ1MorningAutoConf = confType === 'J+1' && newDateTime.getHours() < 12;
+
+    sheetConfType = isJ1MorningAutoConf ? 'CONF' : confType;
+    sheetStatus = 'PLANIFIÉ';
+    confPar = '';
+    calendarPrefix = confType === 'J/J' ? 'J/J' : (isJ1MorningAutoConf ? 'CONF' : null);
+    colorId = isDom ? calendar.EVENT_COLORS.grape : calendar.EVENT_COLORS.green;
+  }
+
+  const newTitle = calendarPrefix ? `${calendarPrefix} - ${baseTitle}` : baseTitle;
+
+  // Calcul des temps réels sur le calendrier
+  const calStart = isDom
+    ? new Date(newDateTime.getTime() - DOM_RDV_BUFFER_MINUTES * 60000)
+    : newDateTime;
+  const calEnd = isDom
+    ? new Date(newDateTime.getTime() + (DOM_RDV_TOTAL_MINUTES - DOM_RDV_BUFFER_MINUTES) * 60000)
+    : newEndTime;
 
   try {
     await calendar.updateEvent(agency.calendar_id, eventId, {
       summary: newTitle,
-      description: newLiens || undefined,
-      colorId: calendar.EVENT_COLORS.green,
-      start: { dateTime: newDateTime.toISOString(), timeZone: 'Europe/Paris' },
-      end: { dateTime: newEndTime.toISOString(), timeZone: 'Europe/Paris' },
+      description: description || undefined,
+      colorId,
+      start: { dateTime: calStart.toISOString(), timeZone: 'Europe/Paris' },
+      end: { dateTime: calEnd.toISOString(), timeZone: 'Europe/Paris' },
     });
-    console.log(`[MODIFIER] Calendar event ${eventId} updated`);
+    console.log(`[MODIFIER] Calendar event ${eventId} updated${isRebook ? ' with reset state' : ''}`);
   } catch (calErr) {
     console.error(`[MODIFIER] Calendar update failed:`, calErr.message);
     throw calErr;
   }
 
-  // Update sheet
   try {
-    const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
-    const found = findSheetRowByEventId(rows, eventId);
-    if (found) {
-      found.row[COL.CLIENT] = newNom;
-      found.row[COL.TELEPHONE] = "'" + newTel;
-      found.row[COL.VEHICULE] = newModele;
-      found.row[COL.DATE] = newDateStr;
-      found.row[COL.HEURE] = newHeureStr;
-      found.row[COL.STATUT] = 'PLANIFIÉ';
-      found.row[COL.CONFIRMATION] = getConfType(newDateTime);
-      found.row[COL.UPDATED_AT] = timestamp();
-      await sheets.updateRow(agency.spreadsheet_id, found.index, found.row, agency.sheet_name);
-      console.log(`[MODIFIER] Sheet row ${found.index} updated`);
-    }
+    currentSheetRow.row[COL.CLIENT] = newNom;
+    currentSheetRow.row[COL.TELEPHONE] = "'" + newTel;
+    currentSheetRow.row[COL.VEHICULE] = newModele;
+    currentSheetRow.row[COL.DATE] = newDateStr;
+    currentSheetRow.row[COL.HEURE] = newHeureStr;
+    currentSheetRow.row[COL.STATUT] = sheetStatus;
+    currentSheetRow.row[COL.CONFIRMATION] = sheetConfType;
+    currentSheetRow.row[COL.CONF_PAR] = confPar;
+    currentSheetRow.row[COL.UPDATED_AT] = timestamp();
+    await sheets.updateRow(agency.spreadsheet_id, currentSheetRow.index, currentSheetRow.row, agency.sheet_name);
+    console.log(`[MODIFIER] Sheet row ${currentSheetRow.index} updated${isRebook ? ' with reset state' : ''}`);
   } catch (sheetErr) {
     console.error(`[MODIFIER] Sheet update failed:`, sheetErr.message);
+    return interaction.editReply(`Le calendrier a été mis à jour mais le Sheets a échoué sur l'ID \`${eventId}\`. Vérifie la ligne avant de refaire une modification.`);
   }
 
   const calLink = getCalendarLink(eventId, agency.calendar_id);
-  const embed = buildRdvEmbed('RDV modifié', 0x2196F3, [
-    { name: 'Date', value: newDateStr },
-    { name: 'Heure', value: newHeureStr },
-    { name: 'Agence', value: agency.name },
-    { name: 'Client', value: newNom },
-    { name: 'Téléphone', value: newTel },
-    { name: 'Véhicule', value: `${newMarque} ${newModele} (${newAnnee})` },
-    { name: 'Kilométrage', value: `${newKm} KM` },
-    { name: 'Prix', value: `${newPrix}€` },
-    { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
-    { name: 'Lien', value: newLiens || 'Aucun', inline: false },
-    { name: 'Notes', value: newCommentaire || 'Aucune', inline: false },
-    { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
-  ]);
+  const embed = buildRdvEmbed(
+    isDom ? 'RDV DOM modifié' : 'RDV modifié',
+    isDom ? 0x8E24AA : 0x2196F3,
+    [
+      { name: 'Date', value: newDateStr },
+      { name: 'Heure RDV', value: newHeureStr },
+      { name: 'Créneau agenda', value: isDom ? `${formatTime(calStart)} → ${formatTime(calEnd)}` : '' },
+      { name: 'Agence', value: agency.name },
+      { name: 'Client', value: newNom },
+      { name: 'Téléphone', value: newTel },
+      { name: 'Adresse', value: currentDetails.adresse || '' },
+      { name: 'Véhicule', value: `${newMarque} ${newModele} (${newAnnee})` },
+      { name: 'Kilométrage', value: `${newKm} KM` },
+      { name: 'Prix', value: `${newPrix}€` },
+      { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
+      { name: 'Lien', value: newLiens || 'Aucun', inline: false },
+      { name: 'Notes', value: newCommentaire || 'Aucune', inline: false },
+      { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
+    ]
+  );
 
   await interaction.editReply({ embeds: [embed] });
 }
@@ -760,7 +1050,7 @@ async function handleSupprimer(interaction) {
   let sheetRow = null;
   try {
     const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
-    const found = findSheetRowByEventId(rows, eventId);
+    const found = findSheetRowByEventId(rows, eventId, eventData);
     if (found) {
       sheetRow = found.row;
     }
@@ -778,7 +1068,7 @@ async function handleSupprimer(interaction) {
 
   try {
     const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
-    const found = findSheetRowByEventId(rows, eventId);
+    const found = findSheetRowByEventId(rows, eventId, eventData);
     if (found) {
       await sheets.deleteRow(agency.spreadsheet_id, found.index, agency.sheet_name);
       console.log(`[SUPPRIMER] Sheet row ${found.index} deleted`);
@@ -787,16 +1077,16 @@ async function handleSupprimer(interaction) {
     console.error(`[SUPPRIMER] Sheet delete failed:`, sheetErr.message);
   }
 
-  const titleParts = (eventData?.summary || '').split(' - ');
+  const currentDetails = eventData ? parseManagedRdvEvent(eventData) : null;
   const startDt = eventData?.start?.dateTime ? new Date(eventData.start.dateTime) : null;
 
   const embed = buildRdvEmbed('RDV supprimé', 0x6C757D, [
     { name: 'Date', value: startDt ? formatDate(startDt) : (sheetRow?.[COL.DATE] || '—') },
     { name: 'Heure', value: startDt ? formatTime(startDt) : (sheetRow?.[COL.HEURE] || '—') },
     { name: 'Agence', value: agency.name },
-    { name: 'Client', value: sheetRow?.[COL.CLIENT] || titleParts[1] || '—' },
-    { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || titleParts[2] || '—' },
-    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || '—' },
+    { name: 'Client', value: sheetRow?.[COL.CLIENT] || currentDetails?.nomClient || '—' },
+    { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || currentDetails?.telephone || '—' },
+    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || `${currentDetails?.marque || ''} ${currentDetails?.modele || ''} (${currentDetails?.annee || ''})`.trim() || '—' },
     { name: 'Statut', value: 'SUPPRIMÉ DÉFINITIVEMENT' },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
   ]);

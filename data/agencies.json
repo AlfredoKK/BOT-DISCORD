@@ -16,27 +16,18 @@
       "4": "09:30-18:00",
       "5": "09:30-18:00",
       "6": "09:30-18:00"
-    }
+    },
+    "paused": true
   },
   "villebon": {
     "name": "VILLEBON",
     "calendar_id": "villebon@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 3,
+    "max_rdv_heure": 4,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1445687448255594676",
-    "sheet_name": "VILLEBON",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:30-18:30",
-      "2": "09:30-18:30",
-      "3": "09:30-18:30",
-      "4": "09:30-18:30",
-      "5": "09:30-18:30",
-      "6": "09:30-18:30"
-    },
-    "paused": true
+    "sheet_name": "VILLEBON"
   },
   "tours": {
     "name": "TOURS",
@@ -65,16 +56,7 @@
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1445687396287909998",
-    "sheet_name": "ROUEN",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-19:30",
-      "2": "09:00-19:30",
-      "3": "09:00-19:30",
-      "4": "09:00-19:30",
-      "5": "09:00-19:30",
-      "6": "09:00-19:30"
-    }
+    "sheet_name": "ROUEN"
   },
   "reims": {
     "name": "REIMS",
@@ -118,78 +100,41 @@
     "name": "PARIS 15",
     "calendar_id": "paris15@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 3,
+    "max_rdv_heure": 2,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438197490876540",
-    "sheet_name": "PARIS 15",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-19:30",
-      "2": "09:00-19:30",
-      "3": "09:00-19:30",
-      "4": "09:00-19:30",
-      "5": "09:00-19:30",
-      "6": "09:00-19:30"
-    }
+    "sheet_name": "PARIS 15"
   },
   "orléans": {
     "name": "ORLÉANS",
     "calendar_id": "orleans@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 2,
+    "max_rdv_heure": 1,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1473335272610594930",
-    "sheet_name": "ORLÉANS",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-19:30",
-      "2": "09:00-19:30",
-      "3": "09:00-19:30",
-      "4": "09:00-19:30",
-      "5": "09:00-19:30",
-      "6": "09:00-19:30"
-    }
+    "sheet_name": "ORLÉANS"
   },
   "nice": {
     "name": "NICE",
     "calendar_id": "nice@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 1,
+    "max_rdv_heure": 3,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438287626735647",
-    "sheet_name": "NICE",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-17:30",
-      "2": "09:00-17:30",
-      "3": "09:00-17:30",
-      "4": "09:00-17:30",
-      "5": "09:00-17:30",
-      "6": "09:00-17:30"
-    }
+    "sheet_name": "NICE"
   },
   "mulhouse": {
     "name": "MULHOUSE",
     "calendar_id": "mulhouse@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 5,
+    "max_rdv_heure": 4,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1445677138316628028",
-    "sheet_name": "MULHOUSE",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:30-19:30",
-      "2": "09:30-19:30",
-      "3": "09:30-19:30",
-      "4": "09:30-19:30",
-      "5": "09:30-19:30",
-      "6": "09:30-16:00"
-    },
-    "paused": true
+    "sheet_name": "MULHOUSE"
   },
   "merignac": {
     "name": "MERIGNAC",
@@ -257,27 +202,17 @@
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438059867377787",
-    "sheet_name": "LA ROCHELLE",
-    "paused": true
+    "sheet_name": "LA ROCHELLE"
   },
   "la ciotat": {
     "name": "LA CIOTAT",
     "calendar_id": "laciotat@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 1,
+    "max_rdv_heure": 2,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1459268846434124010",
-    "sheet_name": "LA CIOTAT",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-19:30",
-      "2": "09:00-19:30",
-      "3": "09:00-19:30",
-      "4": "09:00-19:30",
-      "5": "09:00-19:30",
-      "6": "09:00-19:30"
-    }
+    "sheet_name": "LA CIOTAT"
   },
   "herblay": {
     "name": "HERBLAY",
@@ -335,27 +270,18 @@
       "4": "09:00-19:30",
       "5": "09:00-19:30",
       "6": "09:00-19:30"
-    },
-    "paused": true
+    }
   },
   "douai": {
     "name": "DOUAI",
     "calendar_id": "douai@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 1,
+    "max_rdv_heure": 2,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1445687097401933914",
     "sheet_name": "DOUAI",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:30-19:00",
-      "2": "09:30-19:00",
-      "3": "09:30-19:00",
-      "4": "09:30-19:00",
-      "5": "09:30-19:00",
-      "6": "09:30-19:00"
-    }
+    "paused": true
   },
   "colombes": {
     "name": "COLOMBES",
@@ -365,16 +291,7 @@
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446435763641253888",
-    "sheet_name": "COLOMBES",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-19:30",
-      "2": "09:00-19:30",
-      "3": "09:00-19:30",
-      "4": "09:00-19:30",
-      "5": "09:00-19:30",
-      "6": "09:00-19:30"
-    }
+    "sheet_name": "COLOMBES"
   },
   "chartres": {
     "name": "CHARTRES",
@@ -475,20 +392,11 @@
     "name": "COIGNIÈRES - LG PRESTIGE",
     "calendar_id": "lgprestige.lc@gmail.com",
     "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
-    "max_rdv_heure": 1,
+    "max_rdv_heure": 2,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1444016150009876633",
-    "sheet_name": "COIGNIÈRES - LG PRESTIGE",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-19:30",
-      "2": "09:00-19:30",
-      "3": "09:00-19:30",
-      "4": "09:00-19:30",
-      "5": "09:00-19:30",
-      "6": "09:00-19:30"
-    }
+    "sheet_name": "COIGNIÈRES - LG PRESTIGE"
   },
   "colmar": {
     "name": "COLMAR",
@@ -566,7 +474,8 @@
       "4": "09:30-18:30",
       "5": "09:30-18:30",
       "6": "09:30-18:30"
-    }
+    },
+    "paused": true
   },
   "toulouse st orens": {
     "name": "TOULOUSE ST ORENS",
@@ -585,26 +494,8 @@
       "4": "09:30-18:30",
       "5": "09:30-18:30",
       "6": "09:30-18:30"
-    }
-  },
-  "st cannat": {
-    "name": "ST CANNAT",
-    "calendar_id": "agenda@roulejeunesse.fr",
-    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
-    "max_rdv_heure": 3,
-    "granularite": 30,
-    "timezone": "Europe/Paris",
-    "channel_id": "1443992728160571473",
-    "sheet_name": "ST CANNAT",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "fermé",
-      "2": "10:00-18:30",
-      "3": "10:00-18:30",
-      "4": "10:00-18:30",
-      "5": "10:00-18:30",
-      "6": "10:00-18:30"
-    }
+    },
+    "paused": true
   },
   "roanne": {
     "name": "ROANNE",
@@ -623,8 +514,7 @@
       "4": "09:00-19:30",
       "5": "09:00-19:30",
       "6": "09:00-19:30"
-    },
-    "paused": true
+    }
   },
   "st andre dlm": {
     "name": "ST ANDRE DLM",
@@ -650,11 +540,42 @@
     "name": "VALENCE",
     "calendar_id": "valence@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 1,
+    "max_rdv_heure": 2,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1491056162831994972",
     "sheet_name": "VALENCE",
+    "paused": true
+  },
+  "rennes": {
+    "name": "RENNES",
+    "calendar_id": "rennes@vroommarket.fr",
+    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
+    "max_rdv_heure": 3,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1446438430148923484",
+    "sheet_name": "RENNES"
+  },
+  "limoges": {
+    "name": "LIMOGES",
+    "calendar_id": "limoges@vroommarket.fr",
+    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
+    "max_rdv_heure": 2,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1493524941415649290",
+    "sheet_name": "LIMOGES"
+  },
+  "licall test": {
+    "name": "LICALL TEST",
+    "calendar_id": "contact@licall.fr",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 2,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1494020015328985258",
+    "sheet_name": "LICALL TEST",
     "opening_hours": {
       "0": "fermé",
       "1": "09:00-19:30",
@@ -665,23 +586,74 @@
       "6": "09:00-19:30"
     }
   },
-  "rennes": {
-    "name": "RENNES",
-    "calendar_id": "rennes@vroommarket.fr",
+  "villenave": {
+    "name": "VILLENAVE",
+    "calendar_id": "villenave@vroommarket.fr",
+    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
+    "max_rdv_heure": 2,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1495868539817427055",
+    "sheet_name": "VILLENAVE"
+  },
+  "st cyr en val": {
+    "name": "ST CYR EN VAL",
+    "calendar_id": "06e8b4556b6da7e5cd5032bfefdfa78b3d399df1c5c91b5eec976b1a77f4a4ec@group.calendar.google.com",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 1,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1497511563689459805",
+    "sheet_name": "ST CYR EN VAL",
+    "opening_hours": {
+      "0": "fermé",
+      "1": "14:00-19:30",
+      "2": "10:00-19:30",
+      "3": "10:00-19:30",
+      "4": "10:00-19:30",
+      "5": "09:00-18:30",
+      "6": "09:00-18:30"
+    }
+  },
+  "garidech": {
+    "name": "GARIDECH",
+    "calendar_id": "8d9d759dfcc56149afd956d1ef9d66c68af630853dded229ce52aed164a45c9f@group.calendar.google.com",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 2,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1498754405460213880",
+    "sheet_name": "GARIDECH"
+  },
+  "pierrelaye": {
+    "name": "PIERRELAYE",
+    "calendar_id": "ddd5a5a721701446aac08d084d8719e7a95f5638eda018585ea69a8a379bc43f@group.calendar.google.com",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 1,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1498395376007512216",
+    "sheet_name": "PIERRELAYE"
+  },
+  "strasbourg": {
+    "name": "STRASBOURG",
+    "calendar_id": "strasbourg@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
     "max_rdv_heure": 1,
     "granularite": 30,
     "timezone": "Europe/Paris",
-    "channel_id": "1446438430148923484",
-    "sheet_name": "RENNES",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-19:30",
-      "2": "09:00-19:30",
-      "3": "09:00-19:30",
-      "4": "09:00-19:30",
-      "5": "09:00-19:30",
-      "6": "09:00-19:30"
-    }
+    "channel_id": "1500767025205743646",
+    "sheet_name": "STRASBOURG"
+  },
+  "st cannat": {
+    "name": "ST CANNAT",
+    "calendar_id": "agenda@roulejeunesse.fr",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 3,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1443992728160571473",
+    "sheet_name": "ST CANNAT",
+    "dom_rdv_enabled": true
   }
 }

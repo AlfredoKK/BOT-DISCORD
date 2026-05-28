@@ -1,8 +1,8 @@
 /**
  * Parse a date string (DD/MM/YYYY) and time string (HH:MM) into a Date.
- * Strict validation: rejects invalid dates, wrong formats, and past dates.
+ * Strict validation: rejects invalid dates, wrong formats, and past date/times.
  */
-function parseDateTime(dateStr, timeStr) {
+function parseDateTime(dateStr, timeStr, options = {}) {
   let cleanDate = (dateStr || '').trim();
   let cleanTime = (timeStr || '').trim();
 
@@ -68,11 +68,10 @@ function parseDateTime(dateStr, timeStr) {
     throw new Error(`Le ${String(day).padStart(2,'0')}/${String(month).padStart(2,'0')}/${year} n'existe pas.`);
   }
 
-  // Reject past dates (before today)
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (dt < today) {
-    throw new Error(`Date dans le passé: le ${String(day).padStart(2,'0')}/${String(month).padStart(2,'0')}/${year} est déjà passé.`);
+  // Reject past date/times, including earlier slots on the current day.
+  const now = options.now ? new Date(options.now) : new Date();
+  if (dt <= now) {
+    throw new Error(`Date/heure dans le passé: le ${String(day).padStart(2,'0')}/${String(month).padStart(2,'0')}/${year} à ${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')} est déjà passé.`);
   }
 
   return dt;

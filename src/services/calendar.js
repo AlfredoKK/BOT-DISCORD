@@ -6,6 +6,7 @@ const EVENT_COLORS = {
   red: '11',     // Tomate — ANNULÉ
   orange: '6',   // Mandarine — VENDU
   gray: '8',     // Graphite — PAS VENU
+  grape: '3',    // Violet Raisin — RDV MANDAT DOM
 };
 
 async function getCalendarApi() {
