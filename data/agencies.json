@@ -23,7 +23,7 @@
     "name": "VILLEBON",
     "calendar_id": "villebon@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 4,
+    "max_rdv_heure": 9,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1445687448255594676",
@@ -62,20 +62,11 @@
     "name": "REIMS",
     "calendar_id": "reims@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 3,
+    "max_rdv_heure": 4,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438245431902249",
-    "sheet_name": "REIMS",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:30-18:30",
-      "2": "09:30-18:30",
-      "3": "09:30-18:30",
-      "4": "09:30-18:30",
-      "5": "09:30-18:30",
-      "6": "09:30-18:30"
-    }
+    "sheet_name": "REIMS"
   },
   "pau": {
     "name": "PAU",
@@ -100,7 +91,7 @@
     "name": "PARIS 15",
     "calendar_id": "paris15@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 2,
+    "max_rdv_heure": 5,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438197490876540",
@@ -124,7 +115,8 @@
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438287626735647",
-    "sheet_name": "NICE"
+    "sheet_name": "NICE",
+    "paused": true
   },
   "mulhouse": {
     "name": "MULHOUSE",
@@ -208,7 +200,7 @@
     "name": "LA CIOTAT",
     "calendar_id": "laciotat@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 2,
+    "max_rdv_heure": 4,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1459268846434124010",
@@ -218,20 +210,11 @@
     "name": "HERBLAY",
     "calendar_id": "herblay@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 4,
+    "max_rdv_heure": 5,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438008478765136",
-    "sheet_name": "HERBLAY",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-19:30",
-      "2": "09:00-19:30",
-      "3": "09:00-19:30",
-      "4": "09:00-19:30",
-      "5": "09:00-19:30",
-      "6": "09:00-19:30"
-    }
+    "sheet_name": "HERBLAY"
   },
   "evreux": {
     "name": "EVREUX",
@@ -257,20 +240,11 @@
     "name": "ETAMPES",
     "calendar_id": "etampes@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 3,
+    "max_rdv_heure": 5,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1445687298610958407",
-    "sheet_name": "ETAMPES",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-19:30",
-      "2": "09:00-19:30",
-      "3": "09:00-19:30",
-      "4": "09:00-19:30",
-      "5": "09:00-19:30",
-      "6": "09:00-19:30"
-    }
+    "sheet_name": "ETAMPES"
   },
   "douai": {
     "name": "DOUAI",
@@ -280,14 +254,13 @@
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1445687097401933914",
-    "sheet_name": "DOUAI",
-    "paused": true
+    "sheet_name": "DOUAI"
   },
   "colombes": {
     "name": "COLOMBES",
     "calendar_id": "colombes@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 4,
+    "max_rdv_heure": 5,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446435763641253888",
@@ -329,7 +302,8 @@
       "4": "09:00-19:30",
       "5": "09:00-19:30",
       "6": "09:00-19:30"
-    }
+    },
+    "paused": true
   },
   "caen": {
     "name": "CAEN",
@@ -354,20 +328,11 @@
     "name": "BLOIS",
     "calendar_id": "blois@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 1,
+    "max_rdv_heure": 2,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1445686933132021884",
-    "sheet_name": "BLOIS",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "09:00-19:30",
-      "2": "09:00-19:30",
-      "3": "09:00-19:30",
-      "4": "09:00-19:30",
-      "5": "09:00-19:30",
-      "6": "09:00-19:30"
-    }
+    "sheet_name": "BLOIS"
   },
   "béziers": {
     "name": "BÉZIERS",
@@ -416,17 +381,6 @@
       "5": "09:00-18:30",
       "6": "09:00-18:30"
     }
-  },
-  "limas": {
-    "name": "LIMAS",
-    "calendar_id": "08ba71b1372998c118e062c637ca7a65e9f6873bd1248a88555361c50bdf5672@group.calendar.google.com",
-    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
-    "max_rdv_heure": 1,
-    "granularite": 30,
-    "timezone": "Europe/Paris",
-    "channel_id": "1444009256310407259",
-    "sheet_name": "LIMAS",
-    "paused": true
   },
   "maubeuge": {
     "name": "MAUBEUGE",
@@ -524,7 +478,16 @@
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1487578235016315031",
-    "sheet_name": "ST ANDRE DLM"
+    "sheet_name": "ST ANDRE DLM",
+    "opening_hours": {
+      "0": "fermé",
+      "1": "08:15-19:30",
+      "2": "08:15-19:30",
+      "3": "08:15-19:30",
+      "4": "08:15-19:30",
+      "5": "08:15-19:30",
+      "6": "08:15-19:30"
+    }
   },
   "santeny": {
     "name": "SANTENY",
@@ -544,8 +507,7 @@
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1491056162831994972",
-    "sheet_name": "VALENCE",
-    "paused": true
+    "sheet_name": "VALENCE"
   },
   "rennes": {
     "name": "RENNES",
@@ -655,5 +617,35 @@
     "channel_id": "1443992728160571473",
     "sheet_name": "ST CANNAT",
     "dom_rdv_enabled": true
+  },
+  "limas luxe": {
+    "name": "LIMAS LUXE",
+    "calendar_id": "491eaf918e11f1cd0ba49b7464931f944b98bb46c6a283f964b33b220b183566@group.calendar.google.com",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 1,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1514193743790604438",
+    "sheet_name": "LIMAS LUXE"
+  },
+  "limas vl": {
+    "name": "LIMAS VL",
+    "calendar_id": "afb4ae36f19356efd28025db7d226675949f3e7917cd80cc21ed7b04e440db7f@group.calendar.google.com",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 1,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1444009256310407259",
+    "sheet_name": "LIMAS VL"
+  },
+  "limas classique": {
+    "name": "LIMAS CLASSIQUE",
+    "calendar_id": "afb4ae36f19356efd28025db7d226675949f3e7917cd80cc21ed7b04e440db7f@group.calendar.google.com",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 1,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1444009256310407259",
+    "sheet_name": "LIMAS CLASSIQUE"
   }
 }

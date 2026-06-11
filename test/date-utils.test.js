@@ -32,3 +32,33 @@ test('parseDateTime accepts future times on the current day', () => {
   assert.equal(formatDate(result), '28/05/2026');
   assert.equal(formatTime(result), '12:01');
 });
+
+test('parseDateTime rejects h/H shorthand times', () => {
+  assert.throws(
+    () => parseDateTime('28/05/2026', '12h30', { now: NOW }),
+    /Format d'heure invalide/
+  );
+  assert.throws(
+    () => parseDateTime('28/05/2026', '12H30', { now: NOW }),
+    /Format d'heure invalide/
+  );
+});
+
+test('parseDateTime rejects incomplete shorthand times', () => {
+  assert.throws(
+    () => parseDateTime('28/05/2026', '12', { now: NOW }),
+    /Format d'heure invalide/
+  );
+  assert.throws(
+    () => parseDateTime('28/05/2026', '12:', { now: NOW }),
+    /Format d'heure invalide/
+  );
+  assert.throws(
+    () => parseDateTime('28/05/2026', '14h', { now: NOW }),
+    /Format d'heure invalide/
+  );
+  assert.throws(
+    () => parseDateTime('28/05/2026', '16H', { now: NOW }),
+    /Format d'heure invalide/
+  );
+});

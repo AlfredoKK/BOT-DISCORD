@@ -7,7 +7,11 @@
     "start": "node src/index.js",
     "test": "node --test",
     "deploy": "node src/deploy-commands.js",
-    "pm2": "pm2 start ecosystem.config.js"
+    "pm2": "pm2 start ecosystem.config.js",
+    "supabase:check": "node scripts/supabase-db.js check",
+    "supabase:migrate": "node scripts/supabase-db.js migrate",
+    "supabase:export-sheets-sql": "node scripts/export-sheets-to-supabase-sql.js",
+    "supabase:split-import": "node scripts/split-sql-import.js"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.96",

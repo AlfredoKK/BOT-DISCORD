@@ -8,8 +8,7 @@ create type public.appointment_status as enum (
   'scheduled',
   'canceled',
   'sold',
-  'no_show',
-  'deleted'
+  'no_show'
 );
 
 create type public.appointment_confirmation_status as enum (
@@ -102,6 +101,15 @@ create type public.availability_recurrence_kind as enum (
   'biweekly'
 );
 
+create type public.integration_entity_table as enum (
+  'agencies',
+  'agency_availability_rules',
+  'appointment_external_refs',
+  'appointment_slot_holds',
+  'appointments',
+  'staff_members'
+);
+
 create type public.appointment_event_type as enum (
   'created',
   'updated',
@@ -126,6 +134,19 @@ language sql
 immutable
 as $$
   select regexp_replace(coalesce(input, ''), '\D', '', 'g');
+$$;
+
+create or replace function public.is_valid_timezone_name(timezone_name text)
+returns boolean
+language sql
+stable
+as $$
+  select timezone_name is not null
+    and exists (
+      select 1
+      from pg_timezone_names
+      where name = timezone_name
+    );
 $$;
 
 create or replace function public.handle_updated_at()
@@ -153,7 +174,7 @@ create table public.agencies (
   id uuid primary key default gen_random_uuid(),
   slug text not null unique,
   name text not null unique,
-  timezone text not null default 'Europe/Paris',
+  timezone text not null default 'Europe/Paris' check (public.is_valid_timezone_name(timezone)),
   default_slot_minutes smallint not null default 30 check (default_slot_minutes in (15, 30, 60)),
   appointment_duration_minutes smallint not null default 60 check (appointment_duration_minutes > 0),
   default_hourly_capacity integer not null default 1 check (default_hourly_capacity > 0),
@@ -239,7 +260,7 @@ create table public.agency_google_calendars (
   agency_id uuid not null references public.agencies(id) on delete cascade,
   calendar_id text not null unique,
   calendar_name text null,
-  calendar_time_zone text null,
+  calendar_time_zone text null check (calendar_time_zone is null or public.is_valid_timezone_name(calendar_time_zone)),
   is_primary boolean not null default true,
   sync_enabled boolean not null default true,
   metadata jsonb not null default '{}'::jsonb,
@@ -368,8 +389,9 @@ create table public.appointments (
   booked_via public.appointment_origin not null default 'discord_bot',
   scheduled_start_at timestamptz not null,
   scheduled_end_at timestamptz not null,
-  timezone text not null default 'Europe/Paris',
+  timezone text not null default 'Europe/Paris' check (public.is_valid_timezone_name(timezone)),
   slot_minutes smallint not null default 60 check (slot_minutes > 0),
+  capacity_lane smallint not null default 1 check (capacity_lane > 0),
   customer_name text not null,
   customer_phone_raw text not null,
   customer_phone_normalized text generated always as (public.normalize_phone(customer_phone_raw)) stored,
@@ -396,7 +418,10 @@ create table public.appointments (
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint appointments_time_order_chk check (scheduled_start_at < scheduled_end_at)
+  constraint appointments_time_order_chk check (scheduled_start_at < scheduled_end_at),
+  constraint appointments_slot_duration_chk check (
+    scheduled_end_at = scheduled_start_at + (slot_minutes * interval '1 minute')
+  )
 );
 
 create index appointments_agency_start_idx
@@ -414,6 +439,15 @@ create index appointments_phone_idx
 create index appointments_active_idx
   on public.appointments(agency_id, scheduled_start_at desc)
   where deleted_at is null;
+
+alter table public.appointments
+  add constraint appointments_no_double_booking_per_lane
+  exclude using gist (
+    agency_id with =,
+    capacity_lane with =,
+    tstzrange(scheduled_start_at, scheduled_end_at, '[)') with &&
+  )
+  where (deleted_at is null and status <> 'canceled');
 
 create table public.appointment_links (
   id uuid primary key default gen_random_uuid(),
@@ -476,6 +510,7 @@ create table public.appointment_slot_holds (
   appointment_id uuid null references public.appointments(id) on delete set null,
   hold_start_at timestamptz not null,
   hold_end_at timestamptz not null,
+  capacity_lane smallint not null default 1 check (capacity_lane > 0),
   requested_by_source public.actor_source not null default 'system',
   requested_by_staff_id uuid null references public.staff_members(id) on delete set null,
   requested_by_name text null,
@@ -491,11 +526,20 @@ create index appointment_slot_holds_lookup_idx
   on public.appointment_slot_holds(agency_id, hold_start_at, expires_at)
   where released_at is null;
 
+alter table public.appointment_slot_holds
+  add constraint appointment_slot_holds_no_overlap_per_lane
+  exclude using gist (
+    agency_id with =,
+    capacity_lane with =,
+    tstzrange(hold_start_at, hold_end_at, '[)') with &&
+  )
+  where (released_at is null);
+
 create table public.integration_sync_runs (
   id uuid primary key default gen_random_uuid(),
   provider public.external_provider not null,
   direction public.sync_direction not null,
-  entity_table text not null,
+  entity_table public.integration_entity_table not null,
   entity_id uuid null,
   external_ref_id uuid null references public.appointment_external_refs(id) on delete set null,
   action text not null,
@@ -506,6 +550,38 @@ create table public.integration_sync_runs (
   started_at timestamptz not null default now(),
   finished_at timestamptz null
 );
+
+create or replace function public.validate_integration_sync_run_entity()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.entity_id is null then
+    return new;
+  end if;
+
+  case new.entity_table
+    when 'agencies' then
+      perform 1 from public.agencies where id = new.entity_id;
+    when 'agency_availability_rules' then
+      perform 1 from public.agency_availability_rules where id = new.entity_id;
+    when 'appointment_external_refs' then
+      perform 1 from public.appointment_external_refs where id = new.entity_id;
+    when 'appointment_slot_holds' then
+      perform 1 from public.appointment_slot_holds where id = new.entity_id;
+    when 'appointments' then
+      perform 1 from public.appointments where id = new.entity_id;
+    when 'staff_members' then
+      perform 1 from public.staff_members where id = new.entity_id;
+  end case;
+
+  if not found then
+    raise exception 'integration_sync_runs references missing %.id=%', new.entity_table, new.entity_id;
+  end if;
+
+  return new;
+end;
+$$;
 
 create index integration_sync_runs_entity_idx
   on public.integration_sync_runs(entity_table, entity_id, started_at desc);
@@ -568,6 +644,11 @@ before update on public.appointment_external_refs
 for each row
 execute function public.handle_updated_at();
 
+create trigger trg_integration_sync_runs_validate_entity
+before insert or update of entity_table, entity_id on public.integration_sync_runs
+for each row
+execute function public.validate_integration_sync_run_entity();
+
 create or replace view public.v_appointments_current as
 select
   ap.id,
@@ -614,6 +695,8 @@ left join lateral (
   limit 1
 ) cal on true;
 
+alter view public.v_appointments_current set (security_invoker = true);
+
 create or replace view public.v_sheet_appointments_export as
 select
   ag.name as agency_name,
@@ -635,7 +718,6 @@ select
     when 'canceled' then 'ANNULÉ'
     when 'sold' then 'VENDU'
     when 'no_show' then 'PAS VENU'
-    when 'deleted' then 'SUPPRIMÉ'
   end as statut,
   cal.external_id as event_id,
   to_char(ap.updated_at at time zone coalesce(nullif(ap.timezone, ''), ag.timezone), 'DD/MM/YYYY HH24:MI:SS') as updated_at,
@@ -660,6 +742,8 @@ left join lateral (
   limit 1
 ) cal on true
 where ap.deleted_at is null;
+
+alter view public.v_sheet_appointments_export set (security_invoker = true);
 
 create or replace view public.v_agency_daily_appointment_stats as
 select
@@ -686,8 +770,65 @@ group by
   ag.name,
   ((ap.scheduled_start_at at time zone coalesce(nullif(ap.timezone, ''), ag.timezone))::date);
 
+alter view public.v_agency_daily_appointment_stats set (security_invoker = true);
+
 comment on table public.appointments is 'Source of truth for one appointment. Reschedules update the same row and same internal ID; external Google IDs are references, not primary keys.';
 comment on table public.appointment_external_refs is 'Maps an appointment to external systems such as Google Calendar, legacy Google Sheets, or Discord.';
+comment on column public.appointments.deleted_at is 'Soft-delete marker. Appointment status deliberately has no deleted value to avoid status/deleted_at split-brain states.';
+comment on column public.appointments.capacity_lane is 'Capacity bucket used by the GiST exclusion constraint. Multiple overlapping appointments are allowed only when allocated to different lanes.';
+comment on column public.appointment_slot_holds.capacity_lane is 'Capacity bucket reserved during booking. Active holds cannot overlap on the same agency/lane.';
+comment on table public.agency_availability_rules is 'Structured capacity/blocking rules. Overlap is allowed intentionally; conflict resolution is by priority, then most specific application code.';
+comment on column public.agency_weekly_opening_windows.closes_at is 'Opening windows are same-day only by design for this business domain; overnight windows such as 22:00-02:00 require two explicit windows or a future schema change.';
+comment on table public.integration_sync_runs is 'Operational sync log. entity_table is constrained to known internal tables and entity_id is validated on insert/update when present.';
 comment on view public.v_sheet_appointments_export is 'Operational projection that reproduces the legacy Google Sheets list without making Sheets the source of truth.';
+comment on view public.v_appointments_current is 'Current appointment projection. security_invoker keeps table RLS effective when exposed through Supabase APIs.';
+comment on view public.v_agency_daily_appointment_stats is 'Daily appointment stats projection. security_invoker keeps table RLS effective when exposed through Supabase APIs.';
+
+alter table public.agencies enable row level security;
+alter table public.staff_members enable row level security;
+alter table public.staff_identities enable row level security;
+alter table public.agency_staff_assignments enable row level security;
+alter table public.agency_discord_channels enable row level security;
+alter table public.agency_google_calendars enable row level security;
+alter table public.agency_legacy_sheet_tabs enable row level security;
+alter table public.agency_weekly_opening_windows enable row level security;
+alter table public.agency_availability_rules enable row level security;
+alter table public.appointments enable row level security;
+alter table public.appointment_links enable row level security;
+alter table public.appointment_external_refs enable row level security;
+alter table public.appointment_events enable row level security;
+alter table public.appointment_slot_holds enable row level security;
+alter table public.integration_sync_runs enable row level security;
+
+create policy agencies_deny_public_api on public.agencies
+  for all to anon, authenticated using (false) with check (false);
+create policy staff_members_deny_public_api on public.staff_members
+  for all to anon, authenticated using (false) with check (false);
+create policy staff_identities_deny_public_api on public.staff_identities
+  for all to anon, authenticated using (false) with check (false);
+create policy agency_staff_assignments_deny_public_api on public.agency_staff_assignments
+  for all to anon, authenticated using (false) with check (false);
+create policy agency_discord_channels_deny_public_api on public.agency_discord_channels
+  for all to anon, authenticated using (false) with check (false);
+create policy agency_google_calendars_deny_public_api on public.agency_google_calendars
+  for all to anon, authenticated using (false) with check (false);
+create policy agency_legacy_sheet_tabs_deny_public_api on public.agency_legacy_sheet_tabs
+  for all to anon, authenticated using (false) with check (false);
+create policy agency_weekly_opening_windows_deny_public_api on public.agency_weekly_opening_windows
+  for all to anon, authenticated using (false) with check (false);
+create policy agency_availability_rules_deny_public_api on public.agency_availability_rules
+  for all to anon, authenticated using (false) with check (false);
+create policy appointments_deny_public_api on public.appointments
+  for all to anon, authenticated using (false) with check (false);
+create policy appointment_links_deny_public_api on public.appointment_links
+  for all to anon, authenticated using (false) with check (false);
+create policy appointment_external_refs_deny_public_api on public.appointment_external_refs
+  for all to anon, authenticated using (false) with check (false);
+create policy appointment_events_deny_public_api on public.appointment_events
+  for all to anon, authenticated using (false) with check (false);
+create policy appointment_slot_holds_deny_public_api on public.appointment_slot_holds
+  for all to anon, authenticated using (false) with check (false);
+create policy integration_sync_runs_deny_public_api on public.integration_sync_runs
+  for all to anon, authenticated using (false) with check (false);
 
 commit;

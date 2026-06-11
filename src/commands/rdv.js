@@ -579,7 +579,7 @@ async function handleDom(interaction) {
 
   const vehicule = modele.toUpperCase();
   const prospecteur = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
-  const sheetRow = [prospecteur, vehicule, nomClient.toUpperCase(), "'" + telephone, formatDate(rdvTime), heureStr, sheetConfType, 'PLANIFIÉ', eventId, timestamp(), ''];
+  const sheetRow = [prospecteur, vehicule, nomClient.toUpperCase(), "'" + telephone, formatDate(rdvTime), formatTime(rdvTime), sheetConfType, 'PLANIFIÉ', eventId, timestamp(), ''];
 
   let sheetStatus = 'Synchronisé';
   try {
@@ -593,8 +593,8 @@ async function handleDom(interaction) {
   const calLink = getCalendarLink(eventId, agency.calendar_id);
 
   const embed = buildRdvEmbed('RDV DOM créé', 0x8E24AA, [
-    { name: 'Date', value: dateStr },
-    { name: 'Heure RDV', value: heureStr },
+    { name: 'Date', value: formatDate(rdvTime) },
+    { name: 'Heure RDV', value: formatTime(rdvTime) },
     { name: 'Créneau agenda', value: `${formatTime(startTime)} → ${formatTime(endTime)}`, inline: false },
     { name: 'Agence', value: agency.name },
     { name: 'Client', value: nomClient.toUpperCase() },

@@ -55,10 +55,12 @@ This schema is built around a few non-negotiable rules:
 - One appointment also has one stable public ID: `appointments.public_id`
 - Google Calendar `eventId` is only an external reference, never the primary key
 - A reschedule updates the same appointment row instead of creating a clone
+- Active appointments cannot overlap on the same agency/capacity lane
+- Appointment duration is derived consistently from `scheduled_start_at`, `scheduled_end_at`, and `slot_minutes`
 - Every important mutation can be audited in `appointment_events`
 - Capacity rules are structured data, not text parsing forever
 - The legacy sheet format becomes a view, not a source of truth
-- Deletes are modeled as status/history, not as silent data loss
+- Deletes are modeled with `deleted_at` plus history, not as a second appointment status
 
 ## Core Tables
 
@@ -67,7 +69,7 @@ This schema is built around a few non-negotiable rules:
 Source of truth for:
 
 - agency identity
-- timezone
+- timezone, validated against PostgreSQL/Supabase IANA timezone names
 - default slot size
 - default RDV duration
 - default hourly capacity
@@ -117,6 +119,8 @@ This is intentionally better than the current JSON shape because it supports:
 
 It also includes a no-overlap exclusion constraint, so two active windows cannot collide for the same agency/day.
 
+Opening windows are intentionally same-day only. A nocturnal range such as `22:00-02:00` is out of scope for the current agency operating model and should be represented by an explicit future schema change if the business ever needs overnight hours.
+
 ### `agency_availability_rules`
 
 Structured replacement for “policy events” like:
@@ -139,6 +143,8 @@ This table supports:
 - daily capacity overrides
 
 This is the table that should eventually replace parsing Google Calendar titles for business rules.
+
+Rules may overlap intentionally. The `priority` column is the conflict-resolution hook: for example, a full-day default capacity can be overridden by a more specific slot block or lower-numbered priority rule. Because of that, this table does not use the same no-overlap constraint as weekly opening windows.
 
 ### `staff_members`, `staff_identities`, `agency_staff_assignments`
 
@@ -172,6 +178,9 @@ Important choices:
 - `version` gives optimistic concurrency control
 - `public_id` is the future human/business-facing ID
 - rescheduling updates `scheduled_start_at` / `scheduled_end_at` on the same row
+- `scheduled_end_at` must equal `scheduled_start_at + slot_minutes`
+- `capacity_lane` lets the database enforce no overlap per capacity bucket while still allowing agencies with `2/H`, `3/H`, or `4/H`
+- `deleted_at` is the single soft-delete source of truth; there is no `deleted` appointment status
 
 Fields intentionally modeled directly on the appointment:
 
@@ -249,6 +258,8 @@ Why it exists:
 - horizontal scaling would break in-memory locks
 - Supabase needs a persistent reservation layer for race-safe booking
 
+Active holds also use `capacity_lane`, with a GiST exclusion constraint so two in-flight bookings cannot reserve the same lane over an overlapping range.
+
 ### `integration_sync_runs`
 
 Operational debug table for integration traffic.
@@ -259,6 +270,27 @@ Use it for:
 - inbound imports
 - failure diagnosis
 - replay/forensics
+
+`entity_table` is constrained to known internal tables and `(entity_table, entity_id, started_at)` is indexed for debugging. Because the table is polymorphic, `entity_id` cannot be a normal single FK; the migration validates it with a trigger when present.
+
+## Database Safety
+
+### Double Booking
+
+The schema uses GiST exclusion constraints for booking safety:
+
+- `appointments_no_double_booking_per_lane`
+- `appointment_slot_holds_no_overlap_per_lane`
+
+The constraint is lane-based instead of agency-only because the business allows multiple concurrent RDV per agency when capacity is greater than one. Application code must allocate a lane inside the same transaction as the insert.
+
+### RLS
+
+All base tables have Row Level Security enabled.
+
+The initial policies are explicit deny-by-default for Supabase `anon` and `authenticated` roles. This keeps the public API closed while the bot/backend uses privileged server-side credentials. Backoffice/user-facing policies should be added only once the auth-to-staff mapping is implemented.
+
+Public views are marked `security_invoker`, so they do not bypass the underlying table RLS when exposed through Supabase APIs.
 
 ## Sheet Replacement Views
 
@@ -322,6 +354,9 @@ These should stay true during the whole migration:
 5. External refs can be added, replaced, or deleted without changing the appointment primary key.
 6. Operational exports are derived from transactional tables.
 7. Capacity rules are structured rows, not magic titles forever.
+8. Soft deletion is represented by `deleted_at`, never by a separate `deleted` status.
+9. Timezones must be valid IANA timezone names.
+10. Public Supabase API access is denied by default via RLS.
 
 ## Recommended Migration Path
 
@@ -330,6 +365,40 @@ These should stay true during the whole migration:
 Create Supabase and apply the initial migration.
 
 No bot change yet.
+
+Local connection helpers are available for the two Supabase projects:
+
+```bash
+npm run supabase:check -- licall
+npm run supabase:migrate -- licall
+npm run supabase:check -- secondary
+npm run supabase:migrate -- secondary
+```
+
+The real connection strings must stay in local `.env` only:
+
+```bash
+SUPABASE_LICALL_DB_URL=postgresql://postgres:<password>@db.zvfhhcxsdzyubufmexng.supabase.co:5432/postgres
+SUPABASE_SECONDARY_DB_URL=postgresql://postgres:<password>@<host>:5432/postgres
+```
+
+If you do not have the database password yet, copy
+`supabase/migrations/202605150001_initial_business_schema.sql` into the Supabase dashboard SQL editor and run it there.
+
+The current Google Sheets data can also be exported to a SQL import file for the dashboard SQL editor:
+
+```bash
+npm run supabase:export-sheets-sql
+```
+
+By default it writes `/private/tmp/discord-support-supabase-import.sql`. That file contains customer data and must not be committed.
+
+Useful scoped runs:
+
+```bash
+npm run supabase:export-sheets-sql -- --agency villenave
+npm run supabase:export-sheets-sql -- --no-calendar --limit 20
+```
 
 ### Phase 2
 
@@ -381,11 +450,13 @@ Replace Sheets reads/exports with:
 - no more formulas mixed into raw ops rows
 - no more inability to audit reschedules and status changes
 - no more inability to model split opening windows and recurring capacity overrides cleanly
+- database-level protection against lane-level double booking and overlapping holds
+- no ambiguous `status='deleted'` plus `deleted_at` state
 
 ## What Stays Out Of Scope For Now
 
 - bot code changes
-- RLS policy design for end users
+- permissive RLS policy design for end users
 - dashboard implementation
 - live sync workers
 - automated import scripts

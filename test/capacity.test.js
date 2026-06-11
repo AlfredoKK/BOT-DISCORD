@@ -106,6 +106,58 @@ test('timeline check allows back-to-back existing RDVs that never exceed capacit
   assert.equal(result.max, 2);
 });
 
+test('2/H allows a second real RDV when only one RDV MANDAT exists and RDV Perso is also on calendar', async () => {
+  const capacity = loadCapacity([
+    event('policy', '2/H', '2026-06-02T07:15:00+02:00', '2026-06-02T08:15:00+02:00'),
+    event('rdv-1', 'RDV MANDAT - A - 0600000001 - PEUGEOT - 208 - 2020 - 50000 KM - 9000EUR', '2026-06-02T09:30:00+02:00', '2026-06-02T10:30:00+02:00'),
+    event('personal', 'RDV Perso', '2026-06-02T09:30:00+02:00', '2026-06-02T10:30:00+02:00'),
+    event('technical', 'RDV CT GARAGE', '2026-06-02T09:30:00+02:00', '2026-06-02T10:30:00+02:00'),
+  ]);
+
+  const result = await capacity.isSlotAvailable(
+    agency({ name: 'VILLENAVE', max_rdv_heure: 2 }),
+    new Date('2026-06-02T09:30:00+02:00')
+  );
+
+  assert.equal(result.available, true);
+  assert.equal(result.count, 1);
+  assert.equal(result.max, 2);
+});
+
+test('legacy RDV MANDAT titles without separators still consume capacity', async () => {
+  const capacity = loadCapacity([
+    event('policy', '2/H', '2026-06-02T07:15:00+02:00', '2026-06-02T08:15:00+02:00'),
+    event('rdv-1', 'RDV MANDAT LICAL A', '2026-06-02T09:30:00+02:00', '2026-06-02T10:30:00+02:00'),
+    event('rdv-2', 'CONF - RDV MANDAT LICAL B', '2026-06-02T09:30:00+02:00', '2026-06-02T10:30:00+02:00'),
+  ]);
+
+  const result = await capacity.isSlotAvailable(
+    agency({ max_rdv_heure: 2 }),
+    new Date('2026-06-02T09:30:00+02:00')
+  );
+
+  assert.equal(result.available, false);
+  assert.equal(result.count, 2);
+  assert.equal(result.max, 2);
+});
+
+test('implausibly long managed RDV events do not consume every slot for days', async () => {
+  const capacity = loadCapacity([
+    event('policy', '2/H', '2026-06-04T08:00:00+02:00', '2026-06-04T09:00:00+02:00'),
+    event('long-rdv', 'RDV MANDAT - GELLY - 0622952099 - RENAULT - TALISMAN - 2016 - 190000 KM - 8890€', '2026-05-30T11:00:00+02:00', '2026-06-13T12:00:00+02:00'),
+    event('rdv-1', 'RDV MANDAT - GUIDOU - 0624771634 - VOLVO - XC60 - 2015 - 136150 KM - 16200€', '2026-06-04T09:00:00+02:00', '2026-06-04T10:00:00+02:00'),
+  ]);
+
+  const result = await capacity.isSlotAvailable(
+    agency({ name: 'VILLENAVE', max_rdv_heure: 2 }),
+    new Date('2026-06-04T09:00:00+02:00')
+  );
+
+  assert.equal(result.available, true);
+  assert.equal(result.count, 1);
+  assert.equal(result.max, 2);
+});
+
 test('pending holds count across overlapping starts, not only identical 30 minute slot keys', async () => {
   const capacity = loadCapacity([
     event('rdv-1', 'RDV MANDAT - A - 0600000001 - PEUGEOT - 208 - 2020 - 50000 KM - 9000EUR', '2026-05-26T18:00:00+02:00', '2026-05-26T19:00:00+02:00'),

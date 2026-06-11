@@ -3,3 +3,4 @@ node_modules/
 data/google_token.json
 .pm2/
 *.log
+supabase/imports/

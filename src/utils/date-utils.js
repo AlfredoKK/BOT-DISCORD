@@ -21,14 +21,7 @@ function parseDateTime(dateStr, timeStr, options = {}) {
     throw new Error(`Format de date invalide: "${dateStr}". Utilisez le format JJ/MM/AAAA (ex: 14/03/2026)`);
   }
 
-  // ── Auto-fix common time formats ──
-  // "16H30" → "16:30", "16h" → "16:00", "16h15" → "16:15"
-  cleanTime = cleanTime.replace(/[hH]/, ':');
-  // "16:" → "16:00"
-  if (/^\d{1,2}:$/.test(cleanTime)) cleanTime += '00';
-  // Bare number "15" → "15:00"
-  if (/^\d{1,2}$/.test(cleanTime)) cleanTime += ':00';
-  // Final check: time must be HH:MM (after normalization)
+  // Time must be explicit HH:MM. Do not accept "9h30", "9H30", "9", or "9:".
   if (!/^\d{1,2}:\d{2}$/.test(cleanTime)) {
     throw new Error(`Format d'heure invalide: "${timeStr}". Utilisez le format HH:MM (ex: 14:30)`);
   }

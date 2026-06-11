@@ -9,6 +9,7 @@ const {
 // Simple in-memory lock to prevent race conditions on concurrent bookings
 const _pendingHolds = new Map();
 const RDV_DURATION_MS = 60 * 60 * 1000;
+const MAX_MANAGED_RDV_DURATION_MS = 3 * 60 * 60 * 1000;
 
 function holdKey(calendarId, dateTime) {
   return `${calendarId}:${new Date(dateTime).getTime()}`;
@@ -90,7 +91,18 @@ function isCapacityRdvTitle(title) {
   if (isNonCountingRdvTitle(title)) return false;
 
   const baseTitle = normalizeText(stripStatusPrefixes(title));
-  return /\bRDV\b/.test(baseTitle);
+  if (/\b(ANNULE|ANNULEE|ANNULER|ANNULATION|NO\s*-?\s*SHOW|PAS\s+VENU|VENDU)\b/.test(baseTitle)) {
+    return false;
+  }
+
+  return /\bRDV\s+MANDAT(?:\s+DOM)?\b/.test(baseTitle);
+}
+
+function isPlausibleManagedRdvDuration(bounds) {
+  const durationMs = bounds.end.getTime() - bounds.start.getTime();
+  return Number.isFinite(durationMs)
+    && durationMs > 0
+    && durationMs <= MAX_MANAGED_RDV_DURATION_MS;
 }
 
 function getPendingRdvEvents(calendarId, dayStart, dayEnd) {
@@ -255,8 +267,10 @@ async function isSlotAvailable(agency, dateTime, options = {}) {
       continue;
     }
 
-    if (isCapacityRdvTitle(ev.summary || '')) {
+    if (isCapacityRdvTitle(ev.summary || '') && isPlausibleManagedRdvDuration(bounds)) {
       rdvEvents.push({ event: ev, start: bounds.start, end: bounds.end });
+    } else if (isCapacityRdvTitle(ev.summary || '')) {
+      console.warn(`[CAPACITY] Ignoring managed RDV with implausible duration "${ev.summary}" for ${agency.name}`);
     }
   }
 
