@@ -6,6 +6,7 @@ const calendar = require('../services/calendar');
 const sheets = require('../services/sheets');
 const { COL } = sheets;
 const { isSlotAvailable, reserveSlot } = require('../services/capacity');
+const { JOUR_MAP, JOUR_NAMES, isWithinOpeningHours } = require('../services/opening-hours');
 const { parseDateTime, formatDate, formatTime, getConfType } = require('../utils/date-utils');
 const {
   buildManagedRdvDescription,
@@ -270,35 +271,6 @@ function findSheetRowByEventId(rows, eventId, eventData = null) {
   return { index: best.index, row: best.row };
 }
 
-const JOUR_NAMES = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
-const JOUR_MAP = { lundi: 1, mardi: 2, mercredi: 3, jeudi: 4, vendredi: 5, samedi: 6, dimanche: 0 };
-
-function isWithinOpeningHours(agency, dateTime) {
-  if (!agency.opening_hours) return { open: true }; // No hours configured = always open
-
-  const dayOfWeek = dateTime.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  const daySchedule = agency.opening_hours[String(dayOfWeek)];
-
-  if (!daySchedule || daySchedule === 'fermé') {
-    return { open: false, reason: `L'agence **${agency.name}** est fermée le ${JOUR_NAMES[dayOfWeek]}.` };
-  }
-
-  const [openStr, closeStr] = daySchedule.split('-');
-  const [openH, openM] = openStr.split(':').map(Number);
-  const [closeH, closeM] = closeStr.split(':').map(Number);
-
-  const rdvMinutes = dateTime.getHours() * 60 + dateTime.getMinutes();
-  const rdvEndMinutes = rdvMinutes + RDV_DURATION_MINUTES;
-  const openMinutes = openH * 60 + openM;
-  const closeMinutes = closeH * 60 + closeM;
-
-  if (rdvMinutes < openMinutes || rdvEndMinutes > closeMinutes) {
-    return { open: false, reason: `L'agence **${agency.name}** accepte des RDV de ${openStr} à ${closeStr} le ${JOUR_NAMES[dayOfWeek]}. Un RDV d'1h doit se terminer avant la fermeture.` };
-  }
-
-  return { open: true };
-}
-
 function buildEventTitle(prefix, nomClient, telephone, marque, modele, annee, kilometrage, prix, liens, commentaire) {
   // Strip trailing KM/km/€ that users sometimes include in their input
   const cleanKm = String(kilometrage || '').replace(/\s*(km|kms)?\s*$/i, '');
@@ -482,8 +454,8 @@ async function handleAdd(interaction) {
   let sheetStatus = 'Synchronisé';
   try {
     console.log(`[ADD] Sheet row values:`, JSON.stringify(sheetRow));
-    await sheets.appendRow(agency.spreadsheet_id, sheetRow, agency.sheet_name);
-    console.log(`[ADD] Sheet row appended`);
+    const result = await sheets.appendRowVerified(agency.spreadsheet_id, sheetRow, agency.sheet_name, eventId);
+    console.log(`[ADD] Sheet row appended and verified at row ${result.found.index + 1}`);
   } catch (sheetErr) {
     console.error(`[ADD] Sheet append FAILED:`, sheetErr.message);
     sheetStatus = `Erreur: ${sheetErr.message}`;
@@ -583,8 +555,8 @@ async function handleDom(interaction) {
 
   let sheetStatus = 'Synchronisé';
   try {
-    await sheets.appendRow(agency.spreadsheet_id, sheetRow, agency.sheet_name);
-    console.log(`[DOM] Sheet row appended`);
+    const result = await sheets.appendRowVerified(agency.spreadsheet_id, sheetRow, agency.sheet_name, eventId);
+    console.log(`[DOM] Sheet row appended and verified at row ${result.found.index + 1}`);
   } catch (sheetErr) {
     console.error(`[DOM] Sheet append FAILED:`, sheetErr.message);
     sheetStatus = `Erreur: ${sheetErr.message}`;

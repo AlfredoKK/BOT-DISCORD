@@ -11,6 +11,28 @@ const SCOPES = [
 
 let oauth2Client = null;
 
+function readStoredToken() {
+  if (!fs.existsSync(TOKEN_PATH)) return {};
+  return JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
+}
+
+function persistTokenPatch(tokens, options = {}) {
+  try {
+    const existing = readStoredToken();
+    const updated = { ...existing, ...tokens };
+    fs.writeFileSync(TOKEN_PATH, JSON.stringify(updated, null, 2));
+  } catch (err) {
+    console.error(`[Google Auth] Impossible d'écrire ${TOKEN_PATH}: ${err.message}`);
+    if (options.required) throw err;
+  }
+}
+
+function attachTokenPersistence(client) {
+  client.on('tokens', (tokens) => {
+    persistTokenPatch(tokens);
+  });
+}
+
 function getOAuth2Client() {
   if (!oauth2Client) {
     oauth2Client = new google.auth.OAuth2(
@@ -21,16 +43,11 @@ function getOAuth2Client() {
 
     // Load existing token if available
     if (fs.existsSync(TOKEN_PATH)) {
-      const token = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
+      const token = readStoredToken();
       oauth2Client.setCredentials(token);
-
-      // Auto-refresh on token expiry
-      oauth2Client.on('tokens', (tokens) => {
-        const existing = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
-        const updated = { ...existing, ...tokens };
-        fs.writeFileSync(TOKEN_PATH, JSON.stringify(updated, null, 2));
-      });
     }
+
+    attachTokenPersistence(oauth2Client);
   }
   return oauth2Client;
 }
@@ -48,15 +65,7 @@ async function exchangeCode(code) {
   const client = getOAuth2Client();
   const { tokens } = await client.getToken(code);
   client.setCredentials(tokens);
-
-  fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
-
-  // Set up auto-refresh listener
-  client.on('tokens', (newTokens) => {
-    const existing = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
-    const updated = { ...existing, ...newTokens };
-    fs.writeFileSync(TOKEN_PATH, JSON.stringify(updated, null, 2));
-  });
+  persistTokenPatch(tokens, { required: true });
 
   return tokens;
 }

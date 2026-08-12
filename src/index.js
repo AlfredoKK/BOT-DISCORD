@@ -1,14 +1,27 @@
 require('dotenv').config();
 
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
+const { Agent } = require('undici');
 const fs = require('fs');
 const path = require('path');
+
+const discordRestAgent = new Agent({
+  connections: 4,
+  connectTimeout: 10_000,
+  keepAliveMaxTimeout: 1_000,
+  keepAliveTimeout: 1_000,
+  pipelining: 0,
+});
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
   ],
+  rest: {
+    agent: discordRestAgent,
+    timeout: 20_000,
+  },
 });
 
 // Load commands
@@ -43,7 +56,7 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-client.once('ready', () => {
+client.once('clientReady', () => {
   console.log(`Bot connecté en tant que ${client.user.tag}`);
   console.log(`${client.commands.size} commande(s) chargée(s)`);
 
@@ -65,6 +78,7 @@ process.on('uncaughtException', (err) => {
 process.on('SIGINT', () => {
   console.log('SIGINT received, shutting down...');
   client.destroy();
+  discordRestAgent.close().catch(() => {});
   process.exit(0);
 });
 

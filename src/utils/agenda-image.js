@@ -157,11 +157,18 @@ function getEnd(event) {
 // ═══════════════════════════════════════
 // MAIN RENDER
 // ═══════════════════════════════════════
-function generateAgendaImage(sunday, events, colorMap, calendarDefaultColor) {
+function generateAgendaImage(sunday, events, colorMap, calendarDefaultColor, options = {}) {
   const colors = colorMap || FALLBACK_COLORS;
   const days = getWeekDaysSunday(sunday);
-  const canvas = createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+  const renderScale = options.scale && options.scale > 0 && options.scale < 1 ? options.scale : 1;
+  const canvas = createCanvas(
+    Math.round(CANVAS_WIDTH * renderScale),
+    Math.round(CANVAS_HEIGHT * renderScale)
+  );
   const ctx = canvas.getContext('2d');
+  if (renderScale !== 1) {
+    ctx.scale(renderScale, renderScale);
+  }
 
   // ── Background ──
   ctx.fillStyle = BG;

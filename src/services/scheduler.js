@@ -4,6 +4,9 @@ const { AttachmentBuilder } = require('discord.js');
 const { getEventsInRange, getEventColorMap, getCalendarDefaultColor } = require('./calendar');
 const { generateAgendaImage } = require('../utils/agenda-image');
 const { getWeekStartSunday, getWeekDaysSunday, formatDate } = require('../utils/date-utils');
+const { buildAgendaFallbackContent, buildAgendaHeader } = require('../utils/agenda-summary');
+const { archiveScreenshot, isDriveArchiveConfigured } = require('./drive-archiver');
+const { delay, enqueueNetworkOperation, retryNetworkOperation } = require('../utils/retry');
 
 const AGENCIES_PATH = path.join(__dirname, '../../data/agencies.json');
 
@@ -28,7 +31,7 @@ function getParisTime() {
 /**
  * Send agenda images (S & S+1) for a single agency to its channel
  */
-async function sendAgendaForAgency(client, agencyKey, agency, sharedColorMap) {
+async function sendAgendaForAgency(client, agencyKey, agency, sharedColorMap, options = {}) {
   if (!agency.channel_id) {
     console.log(`[Scheduler] Agence ${agency.name}: pas de channel_id configuré, skip.`);
     return;
@@ -82,45 +85,73 @@ async function sendAgendaForAgency(client, agencyKey, agency, sharedColorMap) {
       }
 
       const imageBuffer = generateAgendaImage(sunday, events, colorMap, calDefaultColor);
-      const attachment = new AttachmentBuilder(imageBuffer, {
-        name: `agenda_${agencyKey}_${semaine.replace('+', 'plus')}.png`,
-      });
+      const fileName = `agenda_${agencyKey}_${semaine.replace('+', 'plus')}.png`;
 
       const weekLabel = semaine === 'S' ? 'cette semaine' : 'semaine prochaine';
       const dateRange = `${formatDate(sunday)} — ${formatDate(days[6])}`;
+      const content = buildAgendaHeader(agency.name, weekLabel, dateRange, events, commercials);
 
-      // Retry Discord send up to 2 times on timeout/abort
-      let sent = false;
-      for (let attempt = 0; attempt < 2 && !sent; attempt++) {
-        try {
-          await channel.send({
-            content: `**Agenda ${agency.name}** — ${weekLabel}\n${dateRange}\n${events.length} événement(s) | ${commercials.size} commercial(aux)`,
-            files: [attachment],
-          });
-          sent = true;
-        } catch (sendErr) {
-          if (attempt === 0 && (sendErr.name === 'AbortError' || sendErr.code === 'UND_ERR_CONNECT_TIMEOUT')) {
-            console.log(`[Scheduler] Retry send for ${agency.name} ${semaine} after timeout...`);
-            await delay(3000);
-          } else {
-            throw sendErr;
+      try {
+        await retryNetworkOperation(
+          () => {
+            const attachment = new AttachmentBuilder(imageBuffer, { name: fileName });
+            return enqueueNetworkOperation(
+              () => channel.send({
+                content,
+                files: [attachment],
+              }),
+              { priority: 'normal' }
+            );
+          },
+          {
+            attempts: 2,
+            baseDelayMs: 2000,
+            label: `${agency.name} ${semaine}`,
+            onRetry: (sendErr, attempt, attempts, waitMs) => {
+              console.log(`[Scheduler] Retry ${attempt}/${attempts - 1} for ${agency.name} ${semaine} after ${sendErr.message}; waiting ${waitMs}ms...`);
+            },
+          }
+        );
+
+        console.log(`[Scheduler] Agenda ${semaine} envoyé pour ${agency.name}`);
+        if (options.archiveEvening && semaine === 'S' && imageBuffer.length > 0 && isDriveArchiveConfigured()) {
+          try {
+            const driveFileId = await archiveScreenshot(imageBuffer, channel.name || agency.name);
+            if (driveFileId) {
+              console.log(`[Drive] Agenda soir archivé pour ${agency.name}: ${driveFileId}`);
+            }
+          } catch (archiveErr) {
+            console.error(`[Drive] Échec archivage ${agency.name}: ${archiveErr.message}`);
           }
         }
-      }
+      } catch (sendErr) {
+        console.error(`[Scheduler] Image agenda ${semaine} failed for ${agency.name}, sending text fallback: ${sendErr.message}`);
+        const fallbackContent = buildAgendaFallbackContent(agency.name, weekLabel, dateRange, events, commercials);
 
-      console.log(`[Scheduler] Agenda ${semaine} envoyé pour ${agency.name}`);
+        await retryNetworkOperation(
+          () => enqueueNetworkOperation(
+            () => channel.send({ content: fallbackContent }),
+            { priority: 'normal' }
+          ),
+          {
+            attempts: 2,
+            baseDelayMs: 1000,
+            label: `${agency.name} ${semaine} fallback`,
+            onRetry: (fallbackErr, attempt, attempts, waitMs) => {
+              console.log(`[Scheduler] Retry fallback ${attempt}/${attempts - 1} for ${agency.name} ${semaine} after ${fallbackErr.message}; waiting ${waitMs}ms...`);
+            },
+          }
+        );
+
+        console.log(`[Scheduler] Agenda ${semaine} fallback texte envoyé pour ${agency.name}`);
+      }
     } catch (err) {
-      console.error(`[Scheduler] Erreur envoi agenda ${semaine} pour ${agency.name}:`, err.message);
+      console.error(`[Scheduler] Erreur envoi agenda ${semaine} pour ${agency.name}: ${err.message} (${err.name || 'Error'}${err.code ? `/${err.code}` : ''})`);
     }
     // Pause between S and S+1 to avoid network saturation
     await delay(1500);
   }
 }
-
-/**
- * Small delay helper to avoid overwhelming Google/Discord APIs
- */
-function delay(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 /**
  * Check if it's time to send and send for all agencies
@@ -146,7 +177,7 @@ async function checkAndSend(client) {
 
   console.log(`[Scheduler] ${entries.length} agences actives à envoyer`);
   for (const [key, agency] of entries) {
-    await sendAgendaForAgency(client, key, agency, sharedColorMap);
+    await sendAgendaForAgency(client, key, agency, sharedColorMap, { archiveEvening: hours === 21 });
     // 5 second pause between agencies to avoid saturating network and blocking user commands
     await delay(5000);
   }
@@ -154,6 +185,7 @@ async function checkAndSend(client) {
 }
 
 let schedulerInterval = null;
+let schedulerRunning = false;
 
 /**
  * Start the scheduler — checks every 60 seconds
@@ -165,14 +197,24 @@ function startScheduler(client) {
 
   // Check every 60 seconds
   schedulerInterval = setInterval(() => {
+    if (schedulerRunning) {
+      console.log('[Scheduler] Envoi précédent encore en cours, skip.');
+      return;
+    }
+    schedulerRunning = true;
     checkAndSend(client).catch((err) => {
       console.error('[Scheduler] Erreur:', err.message);
+    }).finally(() => {
+      schedulerRunning = false;
     });
   }, 60 * 1000);
 
   // Also check immediately on startup
+  schedulerRunning = true;
   checkAndSend(client).catch((err) => {
     console.error('[Scheduler] Erreur au démarrage:', err.message);
+  }).finally(() => {
+    schedulerRunning = false;
   });
 }
 

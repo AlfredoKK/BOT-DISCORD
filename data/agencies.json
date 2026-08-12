@@ -85,7 +85,8 @@
       "4": "09:00-19:30",
       "5": "09:00-19:30",
       "6": "09:00-19:30"
-    }
+    },
+    "paused": true
   },
   "paris 15": {
     "name": "PARIS 15",
@@ -95,7 +96,8 @@
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438197490876540",
-    "sheet_name": "PARIS 15"
+    "sheet_name": "PARIS 15",
+    "paused": true
   },
   "orléans": {
     "name": "ORLÉANS",
@@ -158,14 +160,13 @@
     "sheet_name": "MARSEILLE",
     "opening_hours": {
       "0": "fermé",
-      "1": "09:30-19:30",
-      "2": "09:30-19:30",
-      "3": "09:30-19:30",
-      "4": "09:30-19:30",
-      "5": "09:30-19:30",
-      "6": "09:30-19:30"
-    },
-    "paused": true
+      "1": "09:00-19:00",
+      "2": "09:00-19:00",
+      "3": "09:00-19:00",
+      "4": "09:00-19:00",
+      "5": "09:00-19:00",
+      "6": "09:00-19:00"
+    }
   },
   "lille": {
     "name": "LILLE",
@@ -190,7 +191,7 @@
     "name": "LA ROCHELLE",
     "calendar_id": "larochelle@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 3,
+    "max_rdv_heure": 4,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438059867377787",
@@ -302,8 +303,7 @@
       "4": "09:00-19:30",
       "5": "09:00-19:30",
       "6": "09:00-19:30"
-    },
-    "paused": true
+    }
   },
   "caen": {
     "name": "CAEN",
@@ -409,27 +409,27 @@
       "4": "10:00-18:30",
       "5": "10:00-18:30",
       "6": "10:00-18:30"
-    }
+    },
+    "paused": true
   },
   "toulouse nord": {
     "name": "TOULOUSE NORD",
-    "calendar_id": "charles.der.khatchadourian@weecars.fr",
-    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "calendar_id": "toulouse@vroommarket.fr",
+    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
     "max_rdv_heure": 2,
     "granularite": 30,
     "timezone": "Europe/Paris",
-    "channel_id": "1478745488286027829",
+    "channel_id": "1523054716001452123",
     "sheet_name": "TOULOUSE NORD",
     "opening_hours": {
       "0": "fermé",
-      "1": "fermé",
-      "2": "09:30-18:30",
-      "3": "09:30-18:30",
-      "4": "09:30-18:30",
-      "5": "09:30-18:30",
-      "6": "09:30-18:30"
-    },
-    "paused": true
+      "1": "09:00-19:00",
+      "2": "09:00-19:00",
+      "3": "09:00-19:00",
+      "4": "09:00-19:00",
+      "5": "09:00-19:00",
+      "6": "09:00-19:00"
+    }
   },
   "toulouse st orens": {
     "name": "TOULOUSE ST ORENS",
@@ -474,20 +474,11 @@
     "name": "ST ANDRE DLM",
     "calendar_id": "rmtopmarques@gmail.com",
     "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
-    "max_rdv_heure": 2,
+    "max_rdv_heure": 3,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1487578235016315031",
-    "sheet_name": "ST ANDRE DLM",
-    "opening_hours": {
-      "0": "fermé",
-      "1": "08:15-19:30",
-      "2": "08:15-19:30",
-      "3": "08:15-19:30",
-      "4": "08:15-19:30",
-      "5": "08:15-19:30",
-      "6": "08:15-19:30"
-    }
+    "sheet_name": "ST ANDRE DLM"
   },
   "santeny": {
     "name": "SANTENY",
@@ -497,13 +488,14 @@
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1487579513171873833",
-    "sheet_name": "SANTENY"
+    "sheet_name": "SANTENY",
+    "paused": true
   },
   "valence": {
     "name": "VALENCE",
     "calendar_id": "valence@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 2,
+    "max_rdv_heure": 3,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1491056162831994972",
@@ -552,11 +544,12 @@
     "name": "VILLENAVE",
     "calendar_id": "villenave@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 2,
+    "max_rdv_heure": 4,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1495868539817427055",
-    "sheet_name": "VILLENAVE"
+    "sheet_name": "VILLENAVE",
+    "paused": true
   },
   "st cyr en val": {
     "name": "ST CYR EN VAL",
@@ -595,17 +588,19 @@
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1498395376007512216",
-    "sheet_name": "PIERRELAYE"
+    "sheet_name": "PIERRELAYE",
+    "paused": true
   },
   "strasbourg": {
     "name": "STRASBOURG",
     "calendar_id": "strasbourg@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 1,
+    "max_rdv_heure": 2,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1500767025205743646",
-    "sheet_name": "STRASBOURG"
+    "sheet_name": "STRASBOURG",
+    "paused": true
   },
   "st cannat": {
     "name": "ST CANNAT",
@@ -628,16 +623,6 @@
     "channel_id": "1514193743790604438",
     "sheet_name": "LIMAS LUXE"
   },
-  "limas vl": {
-    "name": "LIMAS VL",
-    "calendar_id": "afb4ae36f19356efd28025db7d226675949f3e7917cd80cc21ed7b04e440db7f@group.calendar.google.com",
-    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
-    "max_rdv_heure": 1,
-    "granularite": 30,
-    "timezone": "Europe/Paris",
-    "channel_id": "1444009256310407259",
-    "sheet_name": "LIMAS VL"
-  },
   "limas classique": {
     "name": "LIMAS CLASSIQUE",
     "calendar_id": "afb4ae36f19356efd28025db7d226675949f3e7917cd80cc21ed7b04e440db7f@group.calendar.google.com",
@@ -647,5 +632,74 @@
     "timezone": "Europe/Paris",
     "channel_id": "1444009256310407259",
     "sheet_name": "LIMAS CLASSIQUE"
+  },
+  "lognes": {
+    "name": "LOGNES",
+    "calendar_id": "a7b253b15481ab55b74621880d52dccddc192d7864152326b33258fad71bcd3e@group.calendar.google.com",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 3,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1516507602039738449",
+    "sheet_name": "LOGNES",
+    "opening_hours": {
+      "0": "fermé",
+      "1": "10:00-20:00",
+      "2": "10:00-20:00",
+      "3": "10:00-20:00",
+      "4": "10:00-20:00",
+      "5": "10:00-20:00",
+      "6": "10:00-18:00"
+    },
+    "paused": true
+  },
+  "chantilly": {
+    "name": "CHANTILLY",
+    "calendar_id": "chantilly@vroommarket.fr",
+    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
+    "max_rdv_heure": 3,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1522160684417417316",
+    "sheet_name": "CHANTILLY"
+  },
+  "montauban": {
+    "name": "MONTAUBAN",
+    "calendar_id": "montauban@vroommarket.fr",
+    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
+    "max_rdv_heure": 2,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1446438522964803707",
+    "sheet_name": "MONTAUBAN"
+  },
+  "annemasse": {
+    "name": "ANNEMASSE",
+    "calendar_id": "hudaver.bas@weecars.fr",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 3,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1524379025051615383",
+    "sheet_name": "ANNEMASSE"
+  },
+  "lyon nord": {
+    "name": "LYON NORD",
+    "calendar_id": "lyonnord@vroommarket.fr",
+    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
+    "max_rdv_heure": 1,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1529515787986145340",
+    "sheet_name": "LYON NORD",
+    "opening_hours": {
+      "0": "fermé",
+      "1": "09:00-19:00",
+      "2": "09:00-19:00",
+      "3": "09:00-19:00",
+      "4": "09:00-19:00",
+      "5": "09:00-19:00",
+      "6": "09:00-19:00"
+    }
   }
 }

@@ -19,7 +19,7 @@ async function withRetry(fn, retries = 3) {
 
 // Build range with optional sheet name: "SheetName!A:K" or just "A:K"
 function r(sheetName, range) {
-  if (sheetName) return `'${sheetName}'!${range}`;
+  if (sheetName) return `'${String(sheetName).replace(/'/g, "''")}'!${range}`;
   return range;
 }
 
@@ -43,6 +43,8 @@ async function appendRow(spreadsheetId, values, sheetName) {
       spreadsheetId,
       range: r(sheetName, 'A:K'),
       valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      includeValuesInResponse: true,
       requestBody: {
         values: [values],
       },
@@ -89,6 +91,38 @@ async function findRowByClient(spreadsheetId, clientName, sheetName) {
     }
   }
   return null;
+}
+
+async function findRowByEventId(spreadsheetId, eventId, sheetName) {
+  const rows = await getAllRows(spreadsheetId, sheetName);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (row[COL.EVENT_ID] === eventId) {
+      return { index: i, row };
+    }
+  }
+  return null;
+}
+
+async function appendRowVerified(spreadsheetId, values, sheetName, eventId) {
+  const appendResult = await appendRow(spreadsheetId, values, sheetName);
+  if (!eventId) return appendResult;
+
+  let found = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    found = await findRowByEventId(spreadsheetId, eventId, sheetName);
+    if (found) break;
+    if (attempt < 3) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+    }
+  }
+
+  if (!found) {
+    const updatedRange = appendResult.data?.updates?.updatedRange || 'range inconnue';
+    throw new Error(`append confirmé par Google (${updatedRange}) mais EVENT_ID ${eventId} introuvable dans l'onglet ${sheetName || '(premier onglet)'}`);
+  }
+
+  return { appendResult, found };
 }
 
 async function updateRow(spreadsheetId, rowIndex, values, sheetName) {
@@ -159,9 +193,11 @@ async function listSheetTabs(spreadsheetId) {
 module.exports = {
   COL,
   appendRow,
+  appendRowVerified,
   getAllRows,
   findRow,
   findRowByClient,
+  findRowByEventId,
   updateRow,
   updateCell,
   deleteRow,
