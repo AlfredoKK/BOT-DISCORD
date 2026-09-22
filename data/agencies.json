@@ -694,16 +694,6 @@
     "channel_id": "1529861784633217135",
     "sheet_name": "BOURGOIN JAILLEUX"
   },
-  "poitiers": {
-    "name": "POITIERS",
-    "calendar_id": "thomas.motillon@weecars.fr",
-    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 2,
-    "granularite": 30,
-    "timezone": "Europe/Paris",
-    "channel_id": "1542200508188598412",
-    "sheet_name": "POITIERS"
-  },
   "limoges - weecars": {
     "name": "LIMOGES - WEECARS",
     "calendar_id": "benjamin.habonneau@weecars.fr",
@@ -713,5 +703,25 @@
     "timezone": "Europe/Paris",
     "channel_id": "1542200688098943088",
     "sheet_name": "LIMOGES - WEECARS"
+  },
+  "poitiers - weecars": {
+    "name": "POITIERS - WEECARS",
+    "calendar_id": "thomas.motillon@weecars.fr",
+    "spreadsheet_id": "16H-aZ8eV9M5Qd5ZToWFSluZFbtHKdP0wcS3mtBK_mzI",
+    "max_rdv_heure": 2,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1542200508188598412",
+    "sheet_name": "POITIERS - WEECARS"
+  },
+  "poitiers": {
+    "name": "POITIERS",
+    "calendar_id": "poitiers@vroommarket.fr",
+    "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
+    "max_rdv_heure": 2,
+    "granularite": 30,
+    "timezone": "Europe/Paris",
+    "channel_id": "1549341286501318656",
+    "sheet_name": "POITIERS"
   }
 }
