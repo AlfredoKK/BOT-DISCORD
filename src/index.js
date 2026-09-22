@@ -56,9 +56,21 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-client.once('clientReady', () => {
+client.once('clientReady', async () => {
   console.log(`Bot connecté en tant que ${client.user.tag}`);
   console.log(`${client.commands.size} commande(s) chargée(s)`);
+
+  // Enregistre les commandes slash auprès de Discord à chaque démarrage,
+  // pour que la liste visible dans Discord suive toujours le code déployé.
+  // Désactivable avec REGISTER_COMMANDS_ON_START=false.
+  if (process.env.REGISTER_COMMANDS_ON_START !== 'false') {
+    try {
+      const { registerCommands } = require('./deploy-commands');
+      await registerCommands({ clientId: process.env.DISCORD_CLIENT_ID || client.user.id });
+    } catch (err) {
+      console.error('[Commands] Échec de l\'enregistrement des commandes:', err.message);
+    }
+  }
 
   // Start automatic agenda scheduler
   const { startScheduler } = require('./services/scheduler');
