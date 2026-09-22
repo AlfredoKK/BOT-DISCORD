@@ -229,7 +229,7 @@ async function handleAdd(interaction) {
 
   let sheetStatus = 'Synchronisé';
   try {
-    console.log(`[ADD] Sheet row values:`, JSON.stringify(sheetRow));
+    console.log(`[ADD] Sheet row prepared for event ${eventId} (${sheetRow.length} colonnes)`);
     const result = await sheets.appendRowVerified(agency.spreadsheet_id, sheetRow, agency.sheet_name, eventId);
     console.log(`[ADD] Sheet row appended and verified at row ${result.found.index + 1}`);
   } catch (sheetErr) {

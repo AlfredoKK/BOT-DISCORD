@@ -12,6 +12,24 @@ const { AGENCIES_PATH } = require('../config/paths');
 // Send times in Europe/Paris: 08:00, 12:00, 15:00, 18:00, 21:00
 const SEND_HOURS = [8, 12, 15, 18, 21];
 
+// Seuil d'alerte « agendas-en-échec » sur un passage : au moins N agences OU au moins X % des agences
+const FAILED_AGENCIES_ALERT_MIN = 3;
+const FAILED_AGENCIES_ALERT_RATIO = 0.3;
+
+let lastRunAt = null;   // dernier passage d'envoi effectif (heure d'envoi atteinte)
+let lastCheckAt = null; // dernier tick du scheduler (toutes les 60 s)
+
+// Alerte d'incident sans jamais bloquer le scheduler (require paresseux : alerts -> google-auth uniquement, pas de cycle,
+// mais on garde le même style que calendar.js/sheets.js).
+function alert(kind, error, context, client) {
+  try {
+    const { reportIncident } = require('./alerts');
+    reportIncident({ kind, error, context, client }).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
 function loadAgencies() {
   if (!fs.existsSync(AGENCIES_PATH)) return {};
   return JSON.parse(fs.readFileSync(AGENCIES_PATH, 'utf8'));
@@ -28,12 +46,13 @@ function getParisTime() {
 }
 
 /**
- * Send agenda images (S & S+1) for a single agency to its channel
+ * Send agenda images (S & S+1) for a single agency to its channel.
+ * @returns {Promise<{ ok: true } | { ok: false, error: string }>}
  */
 async function sendAgendaForAgency(client, agencyKey, agency, sharedColorMap, options = {}) {
   if (!agency.channel_id) {
     console.log(`[Scheduler] Agence ${agency.name}: pas de channel_id configuré, skip.`);
-    return;
+    return { ok: false, error: 'pas de channel_id configuré' };
   }
 
   let channel;
@@ -46,9 +65,9 @@ async function sendAgendaForAgency(client, agencyKey, agency, sharedColorMap, op
       console.error(`[Scheduler] ${agency.name}: impossible d'accéder au canal ${agency.channel_id} (${err.message}). Le bot a besoin de la permission "View Channel" + "Send Messages" + "Attach Files" dans ce canal.`);
       sendAgendaForAgency._warned.add(agency.name);
     }
-    return;
+    return { ok: false, error: `canal ${agency.channel_id} inaccessible (${err.message})` };
   }
-  if (!channel) return;
+  if (!channel) return { ok: false, error: `canal ${agency.channel_id} introuvable` };
 
   // Check bot permissions in this channel
   const perms = channel.permissionsFor?.(client.user);
@@ -59,9 +78,11 @@ async function sendAgendaForAgency(client, agencyKey, agency, sharedColorMap, op
     if (!perms.has('AttachFiles')) missing.push('Attach Files');
     if (missing.length > 0) {
       console.error(`[Scheduler] ${agency.name}: permissions manquantes dans <#${agency.channel_id}>: ${missing.join(', ')}`);
-      return;
+      return { ok: false, error: `permissions manquantes: ${missing.join(', ')}` };
     }
   }
+
+  let firstError = null;
 
   for (const semaine of ['S', 'S+1']) {
     try {
@@ -146,10 +167,13 @@ async function sendAgendaForAgency(client, agencyKey, agency, sharedColorMap, op
       }
     } catch (err) {
       console.error(`[Scheduler] Erreur envoi agenda ${semaine} pour ${agency.name}: ${err.message} (${err.name || 'Error'}${err.code ? `/${err.code}` : ''})`);
+      if (!firstError) firstError = `${semaine}: ${err.message}`;
     }
     // Pause between S and S+1 to avoid network saturation
     await delay(1500);
   }
+
+  return firstError ? { ok: false, error: firstError } : { ok: true };
 }
 
 /**
@@ -157,10 +181,12 @@ async function sendAgendaForAgency(client, agencyKey, agency, sharedColorMap, op
  */
 async function checkAndSend(client) {
   const { hours, minutes } = getParisTime();
+  lastCheckAt = new Date();
 
   // Only trigger at :00 (first minute of the target hour)
   if (minutes !== 0 || !SEND_HOURS.includes(hours)) return;
 
+  lastRunAt = new Date();
   console.log(`[Scheduler] Envoi automatique déclenché à ${hours}:00 (Paris)`);
 
   const agencies = loadAgencies();
@@ -175,12 +201,44 @@ async function checkAndSend(client) {
   }
 
   console.log(`[Scheduler] ${entries.length} agences actives à envoyer`);
+  const failures = [];
   for (const [key, agency] of entries) {
-    await sendAgendaForAgency(client, key, agency, sharedColorMap, { archiveEvening: hours === 21 });
+    let result;
+    try {
+      result = await sendAgendaForAgency(client, key, agency, sharedColorMap, { archiveEvening: hours === 21 });
+    } catch (err) {
+      result = { ok: false, error: err.message || String(err) };
+    }
+    if (!result || !result.ok) {
+      failures.push({ name: agency.name || key, error: result?.error || 'erreur inconnue' });
+    }
     // 5 second pause between agencies to avoid saturating network and blocking user commands
     await delay(5000);
   }
-  console.log(`[Scheduler] Envoi terminé pour toutes les agences`);
+  console.log(`[Scheduler] Envoi terminé pour toutes les agences (${failures.length} échec(s) sur ${entries.length})`);
+
+  if (shouldAlertForFailures(failures.length, entries.length)) {
+    const list = failures.map((f) => `- ${f.name} : ${f.error}`).join('\n');
+    alert(
+      'agendas-en-échec',
+      new Error(`${failures.length} agence(s) sur ${entries.length} en échec lors de l'envoi de ${hours}:00`),
+      { heureEnvoi: `${hours}:00 (Paris)`, agencesEnEchec: list },
+      client
+    );
+  }
+}
+
+function shouldAlertForFailures(failedCount, totalCount) {
+  if (failedCount === 0 || totalCount === 0) return false;
+  return failedCount >= FAILED_AGENCIES_ALERT_MIN || failedCount / totalCount >= FAILED_AGENCIES_ALERT_RATIO;
+}
+
+function getLastRunAt() {
+  return lastRunAt;
+}
+
+function getLastCheckAt() {
+  return lastCheckAt;
 }
 
 let schedulerInterval = null;
@@ -203,6 +261,7 @@ function startScheduler(client) {
     schedulerRunning = true;
     checkAndSend(client).catch((err) => {
       console.error('[Scheduler] Erreur:', err.message);
+      alert('scheduler', err, { phase: 'tick' }, client);
     }).finally(() => {
       schedulerRunning = false;
     });
@@ -212,6 +271,7 @@ function startScheduler(client) {
   schedulerRunning = true;
   checkAndSend(client).catch((err) => {
     console.error('[Scheduler] Erreur au démarrage:', err.message);
+    alert('scheduler', err, { phase: 'démarrage' }, client);
   }).finally(() => {
     schedulerRunning = false;
   });
@@ -225,4 +285,11 @@ function stopScheduler() {
   }
 }
 
-module.exports = { startScheduler, stopScheduler, sendAgendaForAgency };
+module.exports = {
+  startScheduler,
+  stopScheduler,
+  sendAgendaForAgency,
+  getLastRunAt,
+  getLastCheckAt,
+  shouldAlertForFailures,
+};
