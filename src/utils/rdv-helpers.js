@@ -1,11 +1,10 @@
 const { EmbedBuilder } = require('discord.js');
 const fs = require('fs');
-const path = require('path');
 const { COL } = require('../services/sheets');
 const { formatDate, formatTime } = require('./date-utils');
 const { buildManagedRdvDescription, parseManagedRdvEvent } = require('./rdv-title');
 
-const AGENCIES_PATH = path.join(__dirname, '../../data/agencies.json');
+const { AGENCIES_PATH } = require('../config/paths');
 const RDV_DURATION_MINUTES = 60;
 const DOM_RDV_BUFFER_MINUTES = 15;  // 15min avant + 15min après
 const DOM_RDV_TOTAL_MINUTES = 90;   // total créneau bloqué = 1h30

@@ -1,13 +1,12 @@
 const { SlashCommandBuilder, AttachmentBuilder } = require('discord.js');
 const fs = require('fs');
-const path = require('path');
 const { getEventsInRange, getEventColorMap, getCalendarDefaultColor } = require('../services/calendar');
 const { generateAgendaImage } = require('../utils/agenda-image');
 const { getWeekStartSunday, getWeekDaysSunday, formatDate } = require('../utils/date-utils');
 const { buildAgendaFallbackContent, buildAgendaHeader } = require('../utils/agenda-summary');
 const { enqueueNetworkOperation, retryNetworkOperation } = require('../utils/retry');
 
-const AGENCIES_PATH = path.join(__dirname, '../../data/agencies.json');
+const { AGENCIES_PATH } = require('../config/paths');
 
 function loadAgencies() {
   if (!fs.existsSync(AGENCIES_PATH)) return {};
