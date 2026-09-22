@@ -65,7 +65,7 @@ async function execute(interaction) {
   try {
     const agency = getAgencyByChannel(interaction.channelId);
     if (!agency) {
-      return interaction.editReply('Ce canal n\'est lié à aucune agence. Utilisez `/rdv config` ici d\'abord.');
+      return interaction.editReply('Ce canal n\'est lié à aucune agence. Un administrateur doit utiliser `/rdvadmin config` ici d\'abord.');
     }
 
     const semaine = interaction.options.getString('semaine') || 'S';
