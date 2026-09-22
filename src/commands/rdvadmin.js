@@ -10,6 +10,7 @@ const {
   getAgencyByChannel,
   requireAgency,
 } = require('../utils/rdv-helpers');
+const { findAgencyConflicts, formatConflicts, verifySheetTab } = require('../services/agency-check');
 
 // ── Slash command definition ──
 // Commande réservée aux administrateurs (voir src/utils/permissions.js).
@@ -42,6 +43,9 @@ const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub.setName('deconfig').setDescription('Supprimer la configuration de ce canal')
+  )
+  .addSubcommand((sub) =>
+    sub.setName('verifier').setDescription('Vérifier la config de toutes les agences (calendriers, onglets, doublons)')
   )
   .addSubcommand((sub) =>
     sub.setName('agences').setDescription('Lister toutes les agences configurées')
@@ -80,6 +84,7 @@ async function execute(interaction) {
       case 'status': return await handleStatus(interaction);
       case 'config': return await handleConfig(interaction);
       case 'deconfig': return await handleDeconfig(interaction);
+      case 'verifier': return await handleVerifier(interaction);
       case 'agences': return await handleAgences(interaction);
       case 'calendars': return await handleCalendars(interaction);
       case 'pause': return await handlePause(interaction);
@@ -180,7 +185,27 @@ async function handleConfig(interaction) {
     }
   }
 
+  // L'onglet doit exister : on refuse plutôt que de laisser une agence écrire dans le vide
+  const tabCheck = await verifySheetTab(spreadsheetId, resolvedSheetName);
+  if (!tabCheck.ok) {
+    const tabs = tabCheck.tabs.length ? `\nOnglets disponibles : ${tabCheck.tabs.map((t) => `\`${t}\``).join(', ')}` : '';
+    return interaction.editReply(`🚫 Configuration refusée : ${tabCheck.reason}.${tabs}`);
+  }
+  if (!resolvedSheetName) resolvedSheetName = tabCheck.resolved || '';
+
   const agencies = loadAgencies();
+
+  // Un calendrier et un onglet ne peuvent appartenir qu'à une seule agence
+  const conflicts = findAgencyConflicts(agencies, agenceName.toLowerCase(), {
+    calendar_id: calendarId, spreadsheet_id: spreadsheetId, sheet_name: resolvedSheetName,
+  }).filter((c) => !(c.type === 'canal'));
+  const foreign = conflicts.filter((c) => {
+    const other = Object.values(agencies).find((cfg) => (cfg.name || '') === c.with);
+    return !other || other.channel_id !== channelId;
+  });
+  if (foreign.length > 0) {
+    return interaction.editReply(`🚫 Configuration refusée, ressources déjà utilisées par une autre agence :\n${formatConflicts(foreign)}`);
+  }
 
   // Un canal = une agence. Toute entrée déjà liée à ce canal est remplacée,
   // même si son nom diffère (ex: "PARIS 15" reconfigurée en "PARIS"),
@@ -239,6 +264,54 @@ async function handleDeconfig(interaction) {
   delete agencies[agency.key];
   saveAgencies(agencies);
   await interaction.reply(`Agence **${agency.name}** supprimée de ce canal.`);
+}
+
+// ── Verifier ──
+
+async function handleVerifier(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const agencies = loadAgencies();
+  const cal = await calendar.getCalendarApi();
+  const problems = [];
+  const tabCache = new Map();
+
+  for (const [key, cfg] of Object.entries(agencies)) {
+    const label = cfg.name || key;
+    const conflicts = findAgencyConflicts(agencies, key, cfg);
+    for (const c of conflicts) problems.push(`**${label}** : ${c.type} partagé avec **${c.with}**`);
+
+    try {
+      await cal.calendarList.get({ calendarId: cfg.calendar_id });
+    } catch (err) {
+      problems.push(`**${label}** : calendrier \`${cfg.calendar_id}\` inaccessible (${err.message})`);
+    }
+
+    if (!tabCache.has(cfg.spreadsheet_id)) {
+      try {
+        tabCache.set(cfg.spreadsheet_id, await sheets.listSheetTabs(cfg.spreadsheet_id));
+      } catch (err) {
+        tabCache.set(cfg.spreadsheet_id, null);
+        problems.push(`**${label}** : classeur \`${cfg.spreadsheet_id}\` inaccessible (${err.message})`);
+      }
+    }
+    const tabs = tabCache.get(cfg.spreadsheet_id);
+    if (tabs && !tabs.includes(cfg.sheet_name)) {
+      problems.push(`**${label}** : onglet \`${cfg.sheet_name}\` introuvable dans le classeur`);
+    }
+  }
+
+  const unique = Array.from(new Set(problems));
+  if (unique.length === 0) {
+    return interaction.editReply(`✅ ${Object.keys(agencies).length} agences vérifiées, aucun problème.`);
+  }
+  const chunks = []; let current = `⚠️ ${unique.length} problème(s) sur ${Object.keys(agencies).length} agences :\n`;
+  for (const line of unique) {
+    if (current.length + line.length + 3 > 1900) { chunks.push(current); current = ''; }
+    current += `- ${line}\n`;
+  }
+  chunks.push(current);
+  await interaction.editReply(chunks[0]);
+  for (let i = 1; i < chunks.length; i++) await interaction.followUp({ content: chunks[i], ephemeral: true });
 }
 
 // ── Agences ──

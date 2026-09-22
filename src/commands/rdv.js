@@ -23,6 +23,7 @@ const {
   buildRdvEmbed,
   vehicleLabel,
 } = require('../utils/rdv-helpers');
+const { verifySheetTab, brokenSheetConfigMessage } = require('../services/agency-check');
 
 // ── Slash command definition ──
 // Commande ouverte aux prospecteurs : créer, modifier, annuler, confirmer un RDV.
@@ -182,6 +183,13 @@ async function handleAdd(interaction) {
     return interaction.editReply(slot.reason || `Créneau complet ! (${slot.count}/${slot.max} RDV sur ce créneau)`);
   }
 
+  // Check Sheets config before touching Calendar, so a broken config never creates orphan events
+  const sheetCheck = await verifySheetTab(agency.spreadsheet_id, agency.sheet_name);
+  if (!sheetCheck.ok) {
+    console.error(`[ADD] Sheets config invalide pour ${agency.name}: ${sheetCheck.reason}`);
+    return interaction.editReply(brokenSheetConfigMessage(agency, sheetCheck));
+  }
+
   const confType = getConfType(dateTime);
   const isJ1MorningAutoConf = confType === 'J+1' && dateTime.getHours() < 12;
   const sheetConfType = isJ1MorningAutoConf ? 'CONF' : confType;
@@ -292,6 +300,12 @@ async function handleDom(interaction) {
   const confType = getConfType(rdvTime);
   const isJ1MorningAutoConf = confType === 'J+1' && rdvTime.getHours() < 12;
   const sheetConfType = isJ1MorningAutoConf ? 'CONF' : confType;
+
+  const sheetCheck = await verifySheetTab(agency.spreadsheet_id, agency.sheet_name);
+  if (!sheetCheck.ok) {
+    console.error(`[DOM] Sheets config invalide pour ${agency.name}: ${sheetCheck.reason}`);
+    return interaction.editReply(brokenSheetConfigMessage(agency, sheetCheck));
+  }
 
   const baseTitle = buildEventTitle('RDV MANDAT DOM', nomClient, telephone, marque, modele, annee, kilometrage, prix, liens, commentaire);
   const description = buildManagedRdvDescription(liens, commentaire, adresse);
