@@ -88,16 +88,15 @@
     },
     "paused": true
   },
-  "paris 15": {
-    "name": "PARIS 15",
+  "paris": {
+    "name": "PARIS",
     "calendar_id": "paris15@vroommarket.fr",
     "spreadsheet_id": "1dshz0ZhA44VziYOirOwQj_AQFRJxehsV7yZnZ5LJ0BU",
-    "max_rdv_heure": 5,
+    "max_rdv_heure": 4,
     "granularite": 30,
     "timezone": "Europe/Paris",
     "channel_id": "1446438197490876540",
-    "sheet_name": "PARIS 15",
-    "paused": true
+    "sheet_name": "PARIS 15"
   },
   "orléans": {
     "name": "ORLÉANS",
