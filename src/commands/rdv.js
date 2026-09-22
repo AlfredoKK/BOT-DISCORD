@@ -1,66 +1,36 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-const fs = require('fs');
-const path = require('path');
-const { generateAuthUrl, exchangeCode, isAuthenticated } = require('../services/google-auth');
+const { SlashCommandBuilder } = require('discord.js');
 const calendar = require('../services/calendar');
 const sheets = require('../services/sheets');
 const { COL } = sheets;
 const { isSlotAvailable, reserveSlot } = require('../services/capacity');
-const { JOUR_MAP, JOUR_NAMES, isWithinOpeningHours } = require('../services/opening-hours');
+const { isWithinOpeningHours } = require('../services/opening-hours');
 const { parseDateTime, formatDate, formatTime, getConfType } = require('../utils/date-utils');
 const {
   buildManagedRdvDescription,
   getPrimaryStatusPrefix,
   parseManagedRdvEvent,
 } = require('../utils/rdv-title');
-
-const AGENCIES_PATH = path.join(__dirname, '../../data/agencies.json');
-const RDV_DURATION_MINUTES = 60;
-const DOM_RDV_BUFFER_MINUTES = 15;  // 15min avant + 15min après
-const DOM_RDV_TOTAL_MINUTES = 90;   // total créneau bloqué = 1h30
-
-function loadAgencies() {
-  if (!fs.existsSync(AGENCIES_PATH)) return {};
-  return JSON.parse(fs.readFileSync(AGENCIES_PATH, 'utf8'));
-}
-
-function saveAgencies(agencies) {
-  fs.writeFileSync(AGENCIES_PATH, JSON.stringify(agencies, null, 2));
-}
-
-function getAgencyByChannel(channelId) {
-  const agencies = loadAgencies();
-  for (const [key, cfg] of Object.entries(agencies)) {
-    if (cfg.channel_id === channelId) return { key, ...cfg };
-  }
-  return null;
-}
-
-function requireAgency(interaction) {
-  return getAgencyByChannel(interaction.channelId);
-}
-
-function getCalendarLink(eventId, calendarId) {
-  const raw = `${eventId} ${calendarId}`;
-  return `https://www.google.com/calendar/event?eid=${Buffer.from(raw).toString('base64').replace(/=+$/, '')}`;
-}
-
-function timestamp() {
-  return new Date().toLocaleString('fr-FR', { timeZone: 'Europe/Paris' });
-}
+const {
+  DOM_RDV_BUFFER_MINUTES,
+  DOM_RDV_TOTAL_MINUTES,
+  requireAgency,
+  getCalendarLink,
+  timestamp,
+  findSheetRowByEventId,
+  buildEventTitle,
+  isEventDomRdv,
+  buildCanonicalManagedEventPayload,
+  buildRdvEmbed,
+  vehicleLabel,
+} = require('../utils/rdv-helpers');
 
 // ── Slash command definition ──
+// Commande ouverte aux prospecteurs : créer, modifier, annuler, confirmer un RDV.
+// Les commandes d'administration sont dans /rdvadmin.
 
 const data = new SlashCommandBuilder()
   .setName('rdv')
   .setDescription('Gestion des rendez-vous')
-  .addSubcommand((sub) =>
-    sub.setName('auth').setDescription('Obtenir le lien d\'autorisation Google')
-  )
-  .addSubcommand((sub) =>
-    sub.setName('callback').setDescription('Valider le code d\'autorisation Google')
-      .addStringOption((opt) => opt.setName('code').setDescription('Code d\'autorisation').setRequired(true))
-  )
   .addSubcommand((sub) =>
     sub.setName('add').setDescription('Ajouter un rendez-vous')
       .addStringOption((opt) => opt.setName('date').setDescription('Date (JJ/MM/AAAA)').setRequired(true))
@@ -99,6 +69,10 @@ const data = new SlashCommandBuilder()
       .addStringOption((opt) => opt.setName('id').setDescription('ID de l\'événement').setRequired(true))
   )
   .addSubcommand((sub) =>
+    sub.setName('supprimer').setDescription('Supprimer définitivement un rendez-vous')
+      .addStringOption((opt) => opt.setName('id').setDescription('ID de l\'événement').setRequired(true))
+  )
+  .addSubcommand((sub) =>
     sub.setName('conf').setDescription('Confirmer un rendez-vous')
       .addStringOption((opt) => opt.setName('id').setDescription('ID de l\'événement').setRequired(true))
       .addStringOption((opt) => opt.setName('statut').setDescription('Statut de confirmation').setRequired(true)
@@ -121,46 +95,6 @@ const data = new SlashCommandBuilder()
       .addStringOption((opt) => opt.setName('prix').setDescription('Nouveau prix').setRequired(false))
       .addStringOption((opt) => opt.setName('liens').setDescription('Nouveaux liens').setRequired(false))
       .addStringOption((opt) => opt.setName('commentaire').setDescription('Nouveau commentaire').setRequired(false))
-  )
-  .addSubcommand((sub) =>
-    sub.setName('supprimer').setDescription('Supprimer définitivement un rendez-vous')
-      .addStringOption((opt) => opt.setName('id').setDescription('ID de l\'événement').setRequired(true))
-  )
-  .addSubcommand((sub) =>
-    sub.setName('status').setDescription('Afficher le statut du bot')
-  )
-  .addSubcommand((sub) =>
-    sub.setName('config').setDescription('Configurer ce canal comme agence')
-      .addStringOption((opt) => opt.setName('agence').setDescription('Nom de l\'agence').setRequired(true))
-      .addStringOption((opt) => opt.setName('calendar_id').setDescription('ID du calendrier Google').setRequired(true))
-      .addStringOption((opt) => opt.setName('spreadsheet_id').setDescription('ID du Google Sheets').setRequired(true))
-      .addIntegerOption((opt) => opt.setName('max_rdv_heure').setDescription('Max RDV par heure').setRequired(true))
-      .addStringOption((opt) => opt.setName('sheet_name').setDescription('Nom de l\'onglet dans le Sheets (ex: Feuille 1)').setRequired(false))
-  )
-  .addSubcommand((sub) =>
-    sub.setName('deconfig').setDescription('Supprimer la configuration de ce canal')
-  )
-  .addSubcommand((sub) =>
-    sub.setName('agences').setDescription('Lister toutes les agences configurées')
-  )
-  .addSubcommand((sub) =>
-    sub.setName('calendars').setDescription('Lister les calendriers Google disponibles')
-  )
-  .addSubcommand((sub) =>
-    sub.setName('pause').setDescription('Mettre en pause les RDV pour cette agence')
-  )
-  .addSubcommand((sub) =>
-    sub.setName('play').setDescription('Reprendre les RDV pour cette agence')
-  )
-  .addSubcommand((sub) =>
-    sub.setName('horaires').setDescription('Configurer les horaires d\'ouverture de l\'agence')
-      .addStringOption((opt) => opt.setName('lundi').setDescription('ex: 09:00-19:00 ou fermé').setRequired(false))
-      .addStringOption((opt) => opt.setName('mardi').setDescription('ex: 09:00-19:00 ou fermé').setRequired(false))
-      .addStringOption((opt) => opt.setName('mercredi').setDescription('ex: 09:00-19:00 ou fermé').setRequired(false))
-      .addStringOption((opt) => opt.setName('jeudi').setDescription('ex: 09:00-19:00 ou fermé').setRequired(false))
-      .addStringOption((opt) => opt.setName('vendredi').setDescription('ex: 09:00-19:00 ou fermé').setRequired(false))
-      .addStringOption((opt) => opt.setName('samedi').setDescription('ex: 09:00-19:00 ou fermé').setRequired(false))
-      .addStringOption((opt) => opt.setName('dimanche').setDescription('ex: 09:00-19:00 ou fermé').setRequired(false))
   );
 
 // ── Main execute ──
@@ -170,23 +104,13 @@ async function execute(interaction) {
 
   try {
     switch (sub) {
-      case 'auth': return await handleAuth(interaction);
-      case 'callback': return await handleCallback(interaction);
       case 'add': return await handleAdd(interaction);
       case 'dom': return await handleDom(interaction);
       case 'annuler': return await handleAnnuler(interaction);
       case 'vendu': return await handleVendu(interaction);
+      case 'supprimer': return await handleSupprimer(interaction);
       case 'conf': return await handleConf(interaction);
       case 'modifier': return await handleModifier(interaction);
-      case 'supprimer': return await handleSupprimer(interaction);
-      case 'status': return await handleStatus(interaction);
-      case 'config': return await handleConfig(interaction);
-      case 'deconfig': return await handleDeconfig(interaction);
-      case 'agences': return await handleAgences(interaction);
-      case 'calendars': return await handleCalendars(interaction);
-      case 'pause': return await handlePause(interaction);
-      case 'play': return await handlePlay(interaction);
-      case 'horaires': return await handleHoraires(interaction);
       default: return await interaction.reply({ content: 'Sous-commande inconnue.', ephemeral: true });
     }
   } catch (err) {
@@ -205,89 +129,6 @@ async function execute(interaction) {
 
 // ── Helpers ──
 
-function normalizeMatchText(value) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toUpperCase();
-}
-
-function normalizePhone(value) {
-  return String(value || '').replace(/\D/g, '');
-}
-
-function scoreSheetRowForEvent(row, eventData) {
-  if (!eventData) return 0;
-
-  const details = parseManagedRdvEvent(eventData);
-  const startDt = eventData.start?.dateTime ? new Date(eventData.start.dateTime) : null;
-  let score = 0;
-
-  if (details.nomClient && normalizeMatchText(row[COL.CLIENT]) === normalizeMatchText(details.nomClient)) {
-    score += 5;
-  }
-
-  if (details.telephone && normalizePhone(row[COL.TELEPHONE]) === normalizePhone(details.telephone)) {
-    score += 4;
-  }
-
-  if (startDt && row[COL.DATE] === formatDate(startDt)) {
-    score += 3;
-  }
-
-  if (startDt && row[COL.HEURE] === formatTime(startDt)) {
-    score += 2;
-  }
-
-  const rowStatus = normalizeMatchText(row[COL.STATUT]);
-  if (rowStatus === 'PLANIFIE' || rowStatus === 'PLANIFIÉ') {
-    score += 1;
-  }
-
-  return score;
-}
-
-function findSheetRowByEventId(rows, eventId, eventData = null) {
-  const matches = [];
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i][COL.EVENT_ID] === eventId) {
-      matches.push({ index: i, row: rows[i] });
-    }
-  }
-
-  if (matches.length === 0) return null;
-  if (matches.length === 1) return matches[0];
-
-  const ranked = matches
-    .map((match) => ({ ...match, score: scoreSheetRowForEvent(match.row, eventData) }))
-    .sort((a, b) => b.score - a.score || b.index - a.index);
-
-  const best = ranked[0];
-  console.warn(
-    `[SHEETS] Duplicate event ID ${eventId} found on rows ${matches.map((m) => m.index + 1).join(', ')}. Chosen row ${best.index + 1} (score ${best.score}).`
-  );
-  return { index: best.index, row: best.row };
-}
-
-function buildEventTitle(prefix, nomClient, telephone, marque, modele, annee, kilometrage, prix, liens, commentaire) {
-  // Strip trailing KM/km/€ that users sometimes include in their input
-  const cleanKm = String(kilometrage || '').replace(/\s*(km|kms)?\s*$/i, '');
-  const cleanPrix = String(prix || '').replace(/\s*€?\s*$/, '');
-  const parts = [
-    prefix,
-    nomClient.toUpperCase(),
-    telephone,
-    marque.toUpperCase(),
-    modele.toUpperCase(),
-    annee,
-    `${cleanKm} KM`,
-    `${cleanPrix}€`,
-  ];
-  return parts.join(' - ');
-}
-
 function getPreservedCalendarPrefix(sheetRow, fallbackTitle) {
   const sheetStatus = String(sheetRow?.[COL.STATUT] || '').trim().toUpperCase();
   const sheetConfirmation = String(sheetRow?.[COL.CONFIRMATION] || '').trim().toUpperCase();
@@ -303,85 +144,12 @@ function getPreservedCalendarPrefix(sheetRow, fallbackTitle) {
   return getPrimaryStatusPrefix(fallbackTitle);
 }
 
-function isEventDomRdv(eventData) {
-  return /\bRDV MANDAT DOM\b/i.test(String(eventData?.summary || ''));
-}
-
-function buildCanonicalManagedEventPayload(details, prefix, isDom = false) {
-  const rdvType = isDom ? 'RDV MANDAT DOM' : 'RDV MANDAT';
-  const baseTitle = buildEventTitle(
-    rdvType,
-    details.nomClient || '',
-    details.telephone || '',
-    details.marque || '',
-    details.modele || '',
-    details.annee || '',
-    details.kilometrage || '',
-    details.prix || '',
-    details.liens || '',
-    details.commentaire || ''
-  );
-  const description = buildManagedRdvDescription(details.liens, details.commentaire, details.adresse);
-  return {
-    summary: prefix ? `${prefix} - ${baseTitle}` : baseTitle,
-    description: description || undefined,
-  };
-}
-
-function truncateForEmbed(value, maxLength = 1024) {
-  const text = String(value ?? '');
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength - 1)}…`;
-}
-
-function buildRdvEmbed(title, color, fields) {
-  const embed = new EmbedBuilder()
-    .setTitle(truncateForEmbed(title, 256))
-    .setColor(color)
-    .setTimestamp();
-
-  for (const f of fields) {
-    if (f.value) {
-      embed.addFields({
-        name: truncateForEmbed(f.name, 256),
-        value: truncateForEmbed(f.value, 1024),
-        inline: f.inline !== false,
-      });
-    }
-  }
-
-  return embed;
-}
-
-// ── Auth ──
-
-async function handleAuth(interaction) {
-  const url = generateAuthUrl();
-  await interaction.reply({
-    content:
-      `**Étape 1** — Cliquez sur ce lien pour autoriser :\n${url}\n\n` +
-      `**Étape 2** — Après autorisation, la page ne chargera pas (c'est normal).\n` +
-      `Copiez le **code** dans la barre d'adresse :\n` +
-      `\`http://localhost:3000/oauth2callback?code=4/0XXXXX...\`\n\n` +
-      `**Étape 3** — Collez le code ici :\n` +
-      `\`/rdv callback code:4/0XXXXX...\``,
-    ephemeral: true,
-  });
-}
-
-async function handleCallback(interaction) {
-  await interaction.deferReply({ ephemeral: true });
-  const code = interaction.options.getString('code');
-  await exchangeCode(code);
-  await interaction.editReply('Google authentifié avec succès !');
-}
-
 // ── Add ──
 
 async function handleAdd(interaction) {
   await interaction.deferReply();
   const agency = requireAgency(interaction);
-  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence. Utilisez `/rdv config` ici d\'abord.');
+  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence. Un administrateur doit utiliser `/rdvadmin config` ici d\'abord.');
 
   if (agency.paused) {
     return interaction.editReply(`⏸️ L'agence **${agency.name}** est actuellement en pause. Aucun RDV ne peut être ajouté. Utilisez \`/rdv play\` pour reprendre.`);
@@ -491,7 +259,7 @@ async function handleAdd(interaction) {
 async function handleDom(interaction) {
   await interaction.deferReply();
   const agency = requireAgency(interaction);
-  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence. Utilisez `/rdv config` ici d\'abord.');
+  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence. Un administrateur doit utiliser `/rdvadmin config` ici d\'abord.');
 
   if (!agency.dom_rdv_enabled) {
     return interaction.editReply('🚫 La fonctionnalité RDV à domicile n\'est pas activée pour cette agence.');
@@ -656,7 +424,7 @@ async function handleAnnuler(interaction) {
     { name: 'Agence', value: agency.name },
     { name: 'Client', value: sheetRow?.[COL.CLIENT] || currentDetails.nomClient || '—' },
     { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || currentDetails.telephone || '—' },
-    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || `${currentDetails.marque || ''} ${currentDetails.modele || ''} (${currentDetails.annee || ''})`.trim() || '—' },
+    { name: 'Véhicule', value: vehicleLabel(sheetRow, currentDetails) },
     { name: 'Statut', value: 'ANNULÉ' },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
@@ -726,10 +494,77 @@ async function handleVendu(interaction) {
     { name: 'Agence', value: agency.name },
     { name: 'Client', value: sheetRow?.[COL.CLIENT] || currentDetails.nomClient || '—' },
     { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || currentDetails.telephone || '—' },
-    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || `${currentDetails.marque || ''} ${currentDetails.modele || ''} (${currentDetails.annee || ''})`.trim() || '—' },
+    { name: 'Véhicule', value: vehicleLabel(sheetRow, currentDetails) },
     { name: 'Statut', value: 'VENDU' },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
+  ]);
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+// ── Supprimer ──
+
+async function handleSupprimer(interaction) {
+  await interaction.deferReply();
+  const agency = requireAgency(interaction);
+  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence.');
+
+  const eventId = interaction.options.getString('id');
+
+  // Get event details before deleting
+  let eventData = null;
+  try {
+    const cal = await calendar.getCalendarApi();
+    const ev = await cal.events.get({ calendarId: agency.calendar_id, eventId });
+    eventData = ev.data;
+  } catch (e) {
+    // Event might not exist, continue
+  }
+
+  // Get sheet row before deleting
+  let sheetRow = null;
+  try {
+    const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
+    const found = findSheetRowByEventId(rows, eventId, eventData);
+    if (found) {
+      sheetRow = found.row;
+    }
+  } catch (e) {
+    // Continue even if sheet read fails
+  }
+
+  try {
+    await calendar.deleteEvent(agency.calendar_id, eventId);
+    console.log(`[SUPPRIMER] Calendar event ${eventId} deleted`);
+  } catch (calErr) {
+    console.error(`[SUPPRIMER] Calendar delete failed:`, calErr.message);
+    return interaction.editReply(`Erreur suppression calendrier: ${calErr.message}`);
+  }
+
+  try {
+    const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
+    const found = findSheetRowByEventId(rows, eventId, eventData);
+    if (found) {
+      await sheets.deleteRow(agency.spreadsheet_id, found.index, agency.sheet_name);
+      console.log(`[SUPPRIMER] Sheet row ${found.index} deleted`);
+    }
+  } catch (sheetErr) {
+    console.error(`[SUPPRIMER] Sheet delete failed:`, sheetErr.message);
+  }
+
+  const currentDetails = eventData ? parseManagedRdvEvent(eventData) : null;
+  const startDt = eventData?.start?.dateTime ? new Date(eventData.start.dateTime) : null;
+
+  const embed = buildRdvEmbed('RDV supprimé', 0x6C757D, [
+    { name: 'Date', value: startDt ? formatDate(startDt) : (sheetRow?.[COL.DATE] || '—') },
+    { name: 'Heure', value: startDt ? formatTime(startDt) : (sheetRow?.[COL.HEURE] || '—') },
+    { name: 'Agence', value: agency.name },
+    { name: 'Client', value: sheetRow?.[COL.CLIENT] || currentDetails?.nomClient || '—' },
+    { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || currentDetails?.telephone || '—' },
+    { name: 'Véhicule', value: vehicleLabel(sheetRow, currentDetails) },
+    { name: 'Statut', value: 'SUPPRIMÉ DÉFINITIVEMENT' },
+    { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
   ]);
 
   await interaction.editReply({ embeds: [embed] });
@@ -801,7 +636,7 @@ async function handleConf(interaction) {
     { name: 'Agence', value: agency.name },
     { name: 'Client', value: sheetRow?.[COL.CLIENT] || currentDetails.nomClient || '—' },
     { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || currentDetails.telephone || '—' },
-    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || `${currentDetails.marque || ''} ${currentDetails.modele || ''} (${currentDetails.annee || ''})`.trim() || '—' },
+    { name: 'Véhicule', value: vehicleLabel(sheetRow, currentDetails) },
     { name: 'Confirmation', value: confStatut },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
@@ -997,320 +832,6 @@ async function handleModifier(interaction) {
   );
 
   await interaction.editReply({ embeds: [embed] });
-}
-
-// ── Supprimer ──
-
-async function handleSupprimer(interaction) {
-  await interaction.deferReply();
-  const agency = requireAgency(interaction);
-  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence.');
-
-  const eventId = interaction.options.getString('id');
-
-  // Get event details before deleting
-  let eventData = null;
-  try {
-    const cal = await calendar.getCalendarApi();
-    const ev = await cal.events.get({ calendarId: agency.calendar_id, eventId });
-    eventData = ev.data;
-  } catch (e) {
-    // Event might not exist, continue
-  }
-
-  // Get sheet row before deleting
-  let sheetRow = null;
-  try {
-    const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
-    const found = findSheetRowByEventId(rows, eventId, eventData);
-    if (found) {
-      sheetRow = found.row;
-    }
-  } catch (e) {
-    // Continue even if sheet read fails
-  }
-
-  try {
-    await calendar.deleteEvent(agency.calendar_id, eventId);
-    console.log(`[SUPPRIMER] Calendar event ${eventId} deleted`);
-  } catch (calErr) {
-    console.error(`[SUPPRIMER] Calendar delete failed:`, calErr.message);
-    return interaction.editReply(`Erreur suppression calendrier: ${calErr.message}`);
-  }
-
-  try {
-    const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
-    const found = findSheetRowByEventId(rows, eventId, eventData);
-    if (found) {
-      await sheets.deleteRow(agency.spreadsheet_id, found.index, agency.sheet_name);
-      console.log(`[SUPPRIMER] Sheet row ${found.index} deleted`);
-    }
-  } catch (sheetErr) {
-    console.error(`[SUPPRIMER] Sheet delete failed:`, sheetErr.message);
-  }
-
-  const currentDetails = eventData ? parseManagedRdvEvent(eventData) : null;
-  const startDt = eventData?.start?.dateTime ? new Date(eventData.start.dateTime) : null;
-
-  const embed = buildRdvEmbed('RDV supprimé', 0x6C757D, [
-    { name: 'Date', value: startDt ? formatDate(startDt) : (sheetRow?.[COL.DATE] || '—') },
-    { name: 'Heure', value: startDt ? formatTime(startDt) : (sheetRow?.[COL.HEURE] || '—') },
-    { name: 'Agence', value: agency.name },
-    { name: 'Client', value: sheetRow?.[COL.CLIENT] || currentDetails?.nomClient || '—' },
-    { name: 'Téléphone', value: sheetRow?.[COL.TELEPHONE] || currentDetails?.telephone || '—' },
-    { name: 'Véhicule', value: sheetRow?.[COL.VEHICULE] || `${currentDetails?.marque || ''} ${currentDetails?.modele || ''} (${currentDetails?.annee || ''})`.trim() || '—' },
-    { name: 'Statut', value: 'SUPPRIMÉ DÉFINITIVEMENT' },
-    { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
-  ]);
-
-  await interaction.editReply({ embeds: [embed] });
-}
-
-// ── Status ──
-
-async function handleStatus(interaction) {
-  const agencies = loadAgencies();
-  const agencyCount = Object.keys(agencies).length;
-  const uptime = process.uptime();
-  const hours = Math.floor(uptime / 3600);
-  const minutes = Math.floor((uptime % 3600) / 60);
-  const seconds = Math.floor(uptime % 60);
-  const authValid = isAuthenticated();
-
-  const embed = new EmbedBuilder()
-    .setTitle('Statut du bot')
-    .setColor(authValid ? 0x34A853 : 0xDC3545)
-    .addFields(
-      { name: 'Uptime', value: `${hours}h ${minutes}m ${seconds}s`, inline: true },
-      { name: 'Google Auth', value: authValid ? 'Valide' : 'Non configuré', inline: true },
-      { name: 'Agences', value: String(agencyCount), inline: true },
-    )
-    .setTimestamp();
-
-  if (agencyCount > 0) {
-    const agencyList = Object.values(agencies).map((cfg) =>
-      `**${cfg.name}** (max ${cfg.max_rdv_heure}/h) → <#${cfg.channel_id}>`
-    ).join('\n');
-    embed.addFields({ name: 'Agences configurées', value: agencyList, inline: false });
-  }
-
-  await interaction.reply({ embeds: [embed], ephemeral: true });
-}
-
-// ── Config ──
-
-async function handleConfig(interaction) {
-  await interaction.deferReply();
-  const agenceName = interaction.options.getString('agence');
-  const calendarId = interaction.options.getString('calendar_id');
-  const spreadsheetId = interaction.options.getString('spreadsheet_id');
-  const maxRdvHeure = interaction.options.getInteger('max_rdv_heure');
-  const channelId = interaction.channelId;
-
-  const sheetName = interaction.options.getString('sheet_name') || '';
-
-  // If no sheet_name given, auto-detect by listing tabs
-  let resolvedSheetName = sheetName;
-  if (!resolvedSheetName) {
-    try {
-      const tabs = await sheets.listSheetTabs(spreadsheetId);
-      console.log(`[CONFIG] Sheet tabs:`, tabs);
-      // Use the first tab that isn't "TOTAUX" or similar summary tabs
-      resolvedSheetName = tabs.find((t) => !t.toLowerCase().includes('totaux') && !t.toLowerCase().includes('résumé')) || tabs[0] || '';
-    } catch (e) {
-      console.error(`[CONFIG] Could not list tabs:`, e.message);
-    }
-  }
-
-  const agencies = loadAgencies();
-  agencies[agenceName.toLowerCase()] = {
-    name: agenceName,
-    calendar_id: calendarId,
-    spreadsheet_id: spreadsheetId,
-    max_rdv_heure: maxRdvHeure,
-    granularite: 30,
-    timezone: 'Europe/Paris',
-    channel_id: channelId,
-    sheet_name: resolvedSheetName,
-  };
-  saveAgencies(agencies);
-
-  const embed = new EmbedBuilder()
-    .setTitle(`Agence ${agenceName} configurée`)
-    .setColor(0x34A853)
-    .addFields(
-      { name: 'Canal', value: `<#${channelId}>`, inline: true },
-      { name: 'Max RDV/heure', value: String(maxRdvHeure), inline: true },
-      { name: 'Calendrier', value: `\`${calendarId}\``, inline: false },
-      { name: 'Spreadsheet', value: `\`${spreadsheetId}\``, inline: false },
-      { name: 'Onglet', value: resolvedSheetName || '(premier onglet)', inline: false },
-    )
-    .setFooter({ text: 'Envoi auto agendas S & S+1 : 08h, 12h, 15h, 18h, 21h' })
-    .setTimestamp();
-
-  await interaction.editReply({ embeds: [embed] });
-}
-
-// ── Deconfig ──
-
-async function handleDeconfig(interaction) {
-  const agency = getAgencyByChannel(interaction.channelId);
-  if (!agency) return interaction.reply({ content: 'Ce canal n\'est lié à aucune agence.', ephemeral: true });
-
-  const agencies = loadAgencies();
-  delete agencies[agency.key];
-  saveAgencies(agencies);
-  await interaction.reply(`Agence **${agency.name}** supprimée de ce canal.`);
-}
-
-// ── Agences ──
-
-async function handleAgences(interaction) {
-  const agencies = loadAgencies();
-  const entries = Object.entries(agencies);
-
-  if (entries.length === 0) return interaction.reply({ content: 'Aucune agence configurée.', ephemeral: true });
-
-  // Discord embed max 25 fields — use plain text list for 33+ agencies
-  const lines = entries.map(([, cfg]) => {
-    const status = cfg.paused ? '⏸️' : '▶️';
-    return `${status} **${cfg.name}** — ${cfg.max_rdv_heure} RDV/h — <#${cfg.channel_id}>`;
-  });
-
-  // Split into chunks of 2000 chars (Discord message limit)
-  const chunks = [];
-  let current = '**Agences configurées :**\n\n';
-  for (const line of lines) {
-    if (current.length + line.length + 1 > 1900) {
-      chunks.push(current);
-      current = '';
-    }
-    current += line + '\n';
-  }
-  if (current) chunks.push(current);
-
-  await interaction.reply(chunks[0]);
-  for (let i = 1; i < chunks.length; i++) {
-    await interaction.followUp(chunks[i]);
-  }
-}
-
-// ── Calendars ──
-
-async function handleCalendars(interaction) {
-  await interaction.deferReply({ ephemeral: true });
-  const calendars = await calendar.listCalendars();
-
-  if (calendars.length === 0) return interaction.editReply('Aucun calendrier trouvé.');
-
-  const lines = calendars.map((cal) => `**${cal.name}** → \`${cal.id}\``).join('\n');
-  await interaction.editReply(`**Calendriers disponibles :**\n${lines}`);
-}
-
-// ── Pause / Play ──
-
-const ALLOWED_PLAY_PAUSE_USERS = ['1446485383729778749'];
-
-async function handlePause(interaction) {
-  // Admin only — prospecteurs must NOT be able to pause agencies
-  const isAllowed = interaction.member.permissions.has('ManageGuild') || interaction.member.permissions.has('Administrator') || ALLOWED_PLAY_PAUSE_USERS.includes(interaction.user.id);
-  if (!isAllowed) {
-    return interaction.reply({ content: 'Seuls les administrateurs peuvent mettre en pause une agence.', ephemeral: true });
-  }
-  await interaction.deferReply();
-  const agency = requireAgency(interaction);
-  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence.');
-
-  const agencies = loadAgencies();
-  if (!agencies[agency.key]) return interaction.editReply('Agence introuvable.');
-
-  agencies[agency.key].paused = true;
-  saveAgencies(agencies);
-
-  await interaction.editReply(`⏸️ L'agence **${agency.name}** est maintenant **en pause**. Plus aucun RDV ne sera accepté jusqu'à \`/rdv play\`.`);
-}
-
-async function handlePlay(interaction) {
-  // Admin only — prospecteurs must NOT be able to resume agencies
-  const isAllowed = interaction.member.permissions.has('ManageGuild') || interaction.member.permissions.has('Administrator') || ALLOWED_PLAY_PAUSE_USERS.includes(interaction.user.id);
-  if (!isAllowed) {
-    return interaction.reply({ content: 'Seuls les administrateurs peuvent réactiver une agence.', ephemeral: true });
-  }
-  await interaction.deferReply();
-  const agency = requireAgency(interaction);
-  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence.');
-
-  const agencies = loadAgencies();
-  if (!agencies[agency.key]) return interaction.editReply('Agence introuvable.');
-
-  delete agencies[agency.key].paused;
-  saveAgencies(agencies);
-
-  await interaction.editReply(`▶️ L'agence **${agency.name}** est maintenant **active**. Les RDV sont de nouveau acceptés.`);
-}
-
-// ── Horaires ──
-
-async function handleHoraires(interaction) {
-  // Admin only
-  if (!interaction.member.permissions.has('ManageGuild') && !interaction.member.permissions.has('Administrator')) {
-    return interaction.reply({ content: 'Seuls les administrateurs peuvent configurer les horaires.', ephemeral: true });
-  }
-
-  await interaction.deferReply();
-  const agency = requireAgency(interaction);
-  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence.');
-
-  const agencies = loadAgencies();
-  const cfg = agencies[agency.key];
-  if (!cfg) return interaction.editReply('Agence introuvable.');
-
-  // Initialize opening_hours if not set
-  if (!cfg.opening_hours) cfg.opening_hours = {};
-
-  const days = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
-  let updated = false;
-
-  for (const day of days) {
-    const value = interaction.options.getString(day);
-    if (value === null || value === undefined) continue;
-
-    const jsDay = JOUR_MAP[day];
-    const clean = value.trim().toLowerCase();
-
-    if (clean === 'fermé' || clean === 'ferme' || clean === 'fermé' || clean === 'closed' || clean === 'off') {
-      cfg.opening_hours[String(jsDay)] = 'fermé';
-      updated = true;
-    } else if (/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/.test(clean)) {
-      cfg.opening_hours[String(jsDay)] = clean;
-      updated = true;
-    } else {
-      return interaction.editReply(`Format invalide pour **${day}**: "${value}". Utilisez HH:MM-HH:MM (ex: 09:00-19:00) ou "fermé".`);
-    }
-  }
-
-  if (!updated) {
-    // No options provided — show current schedule
-    const lines = days.map((day) => {
-      const jsDay = JOUR_MAP[day];
-      const schedule = cfg.opening_hours[String(jsDay)];
-      if (!schedule || schedule === 'fermé') return `**${day.charAt(0).toUpperCase() + day.slice(1)}** : Fermé`;
-      return `**${day.charAt(0).toUpperCase() + day.slice(1)}** : ${schedule}`;
-    });
-
-    return interaction.editReply(`**Horaires de ${agency.name} :**\n${lines.join('\n')}\n\nPour modifier: \`/rdv horaires samedi:fermé dimanche:fermé lundi:09:00-19:00\``);
-  }
-
-  saveAgencies(agencies);
-
-  const lines = days.map((day) => {
-    const jsDay = JOUR_MAP[day];
-    const schedule = cfg.opening_hours[String(jsDay)];
-    if (!schedule || schedule === 'fermé') return `**${day.charAt(0).toUpperCase() + day.slice(1)}** : Fermé`;
-    return `**${day.charAt(0).toUpperCase() + day.slice(1)}** : ${schedule}`;
-  });
-
-  await interaction.editReply(`**Horaires mis à jour pour ${agency.name} :**\n${lines.join('\n')}`);
 }
 
 module.exports = { data, execute };
