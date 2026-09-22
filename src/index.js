@@ -1,5 +1,8 @@
 require('dotenv').config();
 
+const { ensureDataDir } = require('./config/paths');
+ensureDataDir();
+
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const { Agent } = require('undici');
 const fs = require('fs');

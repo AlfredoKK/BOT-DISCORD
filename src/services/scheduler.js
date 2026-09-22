@@ -1,5 +1,4 @@
 const fs = require('fs');
-const path = require('path');
 const { AttachmentBuilder } = require('discord.js');
 const { getEventsInRange, getEventColorMap, getCalendarDefaultColor } = require('./calendar');
 const { generateAgendaImage } = require('../utils/agenda-image');
@@ -8,7 +7,7 @@ const { buildAgendaFallbackContent, buildAgendaHeader } = require('../utils/agen
 const { archiveScreenshot, isDriveArchiveConfigured } = require('./drive-archiver');
 const { delay, enqueueNetworkOperation, retryNetworkOperation } = require('../utils/retry');
 
-const AGENCIES_PATH = path.join(__dirname, '../../data/agencies.json');
+const { AGENCIES_PATH } = require('../config/paths');
 
 // Send times in Europe/Paris: 08:00, 12:00, 15:00, 18:00, 21:00
 const SEND_HOURS = [8, 12, 15, 18, 21];

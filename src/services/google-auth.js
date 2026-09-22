@@ -1,8 +1,7 @@
 const { google } = require('googleapis');
 const fs = require('fs');
-const path = require('path');
 
-const TOKEN_PATH = path.join(__dirname, '../../data/google_token.json');
+const { TOKEN_PATH } = require('../config/paths');
 const REDIRECT_URI = 'http://localhost:3000/oauth2callback';
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
