@@ -241,3 +241,59 @@ test('daily max policy blocks once active RDVs reach the day limit', async () =>
   assert.equal(result.max, 2);
   assert.match(result.reason, /Journee complete|Journée complète/);
 });
+
+test('max_rdv_heure stored as text ("4") is honoured instead of falling back to 1 RDV/H', async () => {
+  const capacity = loadCapacity([
+    event('rdv-1', 'RDV MANDAT - A - 0600000001 - PEUGEOT - 208 - 2020 - 50000 KM - 9000EUR', '2026-05-26T14:00:00+02:00', '2026-05-26T15:00:00+02:00'),
+    event('rdv-2', 'RDV MANDAT - B - 0600000002 - RENAULT - CLIO - 2021 - 40000 KM - 10000EUR', '2026-05-26T14:00:00+02:00', '2026-05-26T15:00:00+02:00'),
+  ]);
+
+  const result = await capacity.isSlotAvailable(
+    agency({ max_rdv_heure: '4' }),
+    new Date('2026-05-26T14:00:00+02:00')
+  );
+
+  assert.equal(result.available, true);
+  assert.equal(result.max, 4);
+  assert.equal(result.count, 2);
+});
+
+test('missing max_rdv_heure lets a calendar "4 RDV/H" marker set the hourly cap', async () => {
+  const capacity = loadCapacity([
+    event('policy', '4 RDV/H', '2026-05-26T08:00:00+02:00', '2026-05-26T09:00:00+02:00'),
+    event('rdv-1', 'RDV MANDAT - A - 0600000001 - PEUGEOT - 208 - 2020 - 50000 KM - 9000EUR', '2026-05-26T14:00:00+02:00', '2026-05-26T15:00:00+02:00'),
+  ]);
+
+  const result = await capacity.isSlotAvailable(
+    agency({ max_rdv_heure: undefined }),
+    new Date('2026-05-26T14:00:00+02:00')
+  );
+
+  assert.equal(result.available, true);
+  assert.equal(result.max, 4);
+});
+
+test('missing max_rdv_heure and no calendar marker still defaults to 1 RDV/H', async () => {
+  const capacity = loadCapacity([
+    event('rdv-1', 'RDV MANDAT - A - 0600000001 - PEUGEOT - 208 - 2020 - 50000 KM - 9000EUR', '2026-05-26T14:00:00+02:00', '2026-05-26T15:00:00+02:00'),
+  ]);
+
+  const result = await capacity.isSlotAvailable(
+    agency({ max_rdv_heure: undefined }),
+    new Date('2026-05-26T14:00:00+02:00')
+  );
+
+  assert.equal(result.available, false);
+  assert.equal(result.max, 1);
+});
+
+test('parseCapacityValue accepts numbers and numeric text, rejects the rest', () => {
+  const { parseCapacityValue } = loadCapacity([]);
+  assert.equal(parseCapacityValue(4), 4);
+  assert.equal(parseCapacityValue('4'), 4);
+  assert.equal(parseCapacityValue(' 3 '), 3);
+  assert.equal(parseCapacityValue(undefined), null);
+  assert.equal(parseCapacityValue(''), null);
+  assert.equal(parseCapacityValue('abc'), null);
+  assert.equal(parseCapacityValue(0), null);
+});
