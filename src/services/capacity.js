@@ -10,6 +10,19 @@ const {
 const _pendingHolds = new Map();
 const RDV_DURATION_MS = 60 * 60 * 1000;
 const MAX_MANAGED_RDV_DURATION_MS = 3 * 60 * 60 * 1000;
+const DEFAULT_HOURLY_MAX = 1;
+
+/**
+ * Lit une valeur de capacité venant de agencies.json.
+ * Retourne un entier > 0, ou null si la valeur est absente ou invalide.
+ */
+function parseCapacityValue(value, label) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(String(value).trim());
+  if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+  if (label) console.warn(`[CAPACITY] Valeur invalide pour ${label}: ${JSON.stringify(value)} (ignorée)`);
+  return null;
+}
 
 function holdKey(calendarId, dateTime) {
   return `${calendarId}:${new Date(dateTime).getTime()}`;
@@ -184,8 +197,9 @@ function findHourlyCapacityBreach(events, candidateStart, candidateEnd, max) {
  */
 async function isSlotAvailable(agency, dateTime, options = {}) {
   const { excludeEventId } = options;
-  const baseHourlyMax = Number.isFinite(agency.max_rdv_heure) ? agency.max_rdv_heure : 1;
-  const baseDailyMax = Number.isFinite(agency.max_rdv_jour) ? agency.max_rdv_jour : null;
+  // Accepte 4, "4" ou " 4 " ; ignore les valeurs absentes ou invalides.
+  const baseHourlyMax = parseCapacityValue(agency.max_rdv_heure, `max_rdv_heure de ${agency.name}`);
+  const baseDailyMax = parseCapacityValue(agency.max_rdv_jour);
   const { start: queryStart, end: queryEnd } = dayRange(dateTime);
 
   const events = await getEventsInRange(agency.calendar_id, queryStart, queryEnd);
@@ -196,6 +210,7 @@ async function isSlotAvailable(agency, dateTime, options = {}) {
   const slotEnd = slotStart + RDV_DURATION_MS;
   const dayStart = queryStart.getTime();
   const dayEnd = queryEnd.getTime();
+  // null = pas de plafond configuré ; le calendrier (ex: "4 RDV/H") peut alors le fixer seul.
   let effectiveHourlyMax = baseHourlyMax;
   let effectiveDailyMax = baseDailyMax;
 
@@ -248,7 +263,9 @@ async function isSlotAvailable(agency, dateTime, options = {}) {
       && (isAllDayEvent(ev) || isDayWideHourlyMarker(bounds) || overlaps(eventStart, eventEnd, slotStart, slotEnd));
 
     if (hourlyPolicyApplies) {
-      effectiveHourlyMax = Math.min(effectiveHourlyMax, policy.hourlyMax);
+      effectiveHourlyMax = effectiveHourlyMax === null
+        ? policy.hourlyMax
+        : Math.min(effectiveHourlyMax, policy.hourlyMax);
     }
 
     if (policy.dailyMax !== null && overlaps(eventStart, eventEnd, dayStart, dayEnd)) {
@@ -272,6 +289,11 @@ async function isSlotAvailable(agency, dateTime, options = {}) {
     } else if (isCapacityRdvTitle(ev.summary || '')) {
       console.warn(`[CAPACITY] Ignoring managed RDV with implausible duration "${ev.summary}" for ${agency.name}`);
     }
+  }
+
+  if (effectiveHourlyMax === null) {
+    console.warn(`[CAPACITY] Aucun plafond horaire valide pour ${agency.name} (config ni calendrier) : 1 RDV/H par défaut`);
+    effectiveHourlyMax = DEFAULT_HOURLY_MAX;
   }
 
   const pendingRdvEvents = getPendingRdvEvents(agency.calendar_id, dayStart, dayEnd);
@@ -364,4 +386,4 @@ function releaseSlot(calendarId, dateTime) {
   }
 }
 
-module.exports = { isSlotAvailable, reserveSlot };
+module.exports = { isSlotAvailable, reserveSlot, parseCapacityValue };
