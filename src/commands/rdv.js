@@ -153,7 +153,7 @@ async function handleAdd(interaction) {
   if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence. Un administrateur doit utiliser `/rdvadmin config` ici d\'abord.');
 
   if (agency.paused) {
-    return interaction.editReply(`⏸️ L'agence **${agency.name}** est actuellement en pause. Aucun RDV ne peut être ajouté. Utilisez \`/rdv play\` pour reprendre.`);
+    return interaction.editReply(`⏸️ L'agence **${agency.name}** est actuellement en pause. Aucun RDV ne peut être ajouté. Un administrateur doit utiliser \`/rdvadmin play\` ici pour reprendre.`);
   }
 
   const dateStr = interaction.options.getString('date');

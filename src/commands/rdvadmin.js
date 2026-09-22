@@ -379,8 +379,9 @@ async function handlePause(interaction) {
 
   agencies[agency.key].paused = true;
   saveAgencies(agencies);
+  console.log(`[PAUSE] Agence ${agency.name} mise en pause par ${interaction.user?.tag || interaction.user?.id}`);
 
-  await interaction.editReply(`⏸️ L'agence **${agency.name}** est maintenant **en pause**. Plus aucun RDV ne sera accepté jusqu'à \`/rdv play\`.`);
+  await interaction.editReply(`⏸️ L'agence **${agency.name}** est maintenant **en pause**. Plus aucun RDV ne sera accepté jusqu'à \`/rdvadmin play\`.`);
 }
 
 async function handlePlay(interaction) {
@@ -393,6 +394,7 @@ async function handlePlay(interaction) {
 
   delete agencies[agency.key].paused;
   saveAgencies(agencies);
+  console.log(`[PLAY] Agence ${agency.name} réactivée par ${interaction.user?.tag || interaction.user?.id}`);
 
   await interaction.editReply(`▶️ L'agence **${agency.name}** est maintenant **active**. Les RDV sont de nouveau acceptés.`);
 }
