@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { generateAuthUrl, exchangeCode, isAuthenticated, hasGmailScope } = require('../services/google-auth');
 const { reportIncident, getAlertStatus } = require('../services/alerts');
 const calendar = require('../services/calendar');
@@ -15,14 +15,13 @@ const { findAgencyConflicts, formatConflicts, verifySheetTab } = require('../ser
 
 // ── Slash command definition ──
 // Commande réservée aux administrateurs (voir src/utils/permissions.js).
-// setDefaultMemberPermissions(Administrator) la cache aux autres membres par défaut ;
-// un rôle admin sans la permission Administrateur doit être autorisé dans
-// Paramètres du serveur > Intégrations > <bot> > /rdvadmin.
+// Visible par tous dans Discord (pas de setDefaultMemberPermissions) pour que les rôles
+// sans permission Administrateur, comme Team Lead, puissent la lancer : c'est le bot
+// qui décide, via requireAdmin, et il trace chaque refus dans les logs.
 
 const data = new SlashCommandBuilder()
   .setName('rdvadmin')
   .setDescription('Administration du bot RDV (admins uniquement)')
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .setDMPermission(false)
   .addSubcommand((sub) =>
     sub.setName('auth').setDescription('Obtenir le lien d\'autorisation Google')

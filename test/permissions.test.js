@@ -55,11 +55,11 @@ test('nom de rôle : les noms qui contiennent "admin" sans en être une déclina
   });
 });
 
-test('ADMIN_ROLE_NAME personnalisé est respecté (trim + minuscules)', () => {
+test('ADMIN_ROLE_NAME ajoute des noms aux défauts (trim + minuscules), sans retirer admin', () => {
   withEnv({ ADMIN_ROLE_IDS: undefined, ADMIN_ROLE_NAME: '  Direction ' }, () => {
     assert.equal(isAdmin(member(['direction'])), true);
     assert.equal(isAdmin(member(['DIRECTIONS'])), true);
-    assert.equal(isAdmin(member(['Admin'])), false);
+    assert.equal(isAdmin(member(['Admin'])), true);
   });
 });
 
@@ -100,4 +100,27 @@ test('requireAdmin répond en éphémère et refuse quand le membre n\'est pas a
       assert.equal(await requireAdmin(ok), true);
     } finally { console.warn = warn; }
   });
+});
+
+test('Team Lead role is accepted by default, Team Laura is not', () => {
+  const { isAdmin, getAdminRoleNames } = require('../src/utils/permissions');
+  const member = (names) => ({ permissions: { has: () => false }, roles: { cache: { some: (fn) => names.map((n, i) => ({ id: String(i), name: n })).some(fn) } } });
+  assert.ok(getAdminRoleNames().includes('team lead'));
+  assert.equal(isAdmin(member(['Team Lead'])), true);
+  assert.equal(isAdmin(member(['TEAM LEAD'])), true);
+  assert.equal(isAdmin(member(['Team Leader'])), true);
+  assert.equal(isAdmin(member(['Team Laura'])), false);
+  assert.equal(isAdmin(member(['Support'])), false);
+});
+
+test('ADMIN_ROLE_NAME adds names to the defaults instead of replacing them', () => {
+  const previous = process.env.ADMIN_ROLE_NAME;
+  process.env.ADMIN_ROLE_NAME = 'admin, direction';
+  try {
+    const { getAdminRoleNames } = require('../src/utils/permissions');
+    const names = getAdminRoleNames();
+    assert.ok(names.includes('admin') && names.includes('team lead') && names.includes('direction'));
+  } finally {
+    if (previous === undefined) delete process.env.ADMIN_ROLE_NAME; else process.env.ADMIN_ROLE_NAME = previous;
+  }
 });
