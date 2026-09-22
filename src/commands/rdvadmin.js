@@ -181,6 +181,18 @@ async function handleConfig(interaction) {
   }
 
   const agencies = loadAgencies();
+
+  // Un canal = une agence. Toute entrée déjà liée à ce canal est remplacée,
+  // même si son nom diffère (ex: "PARIS 15" reconfigurée en "PARIS"),
+  // sinon le bot continue d'utiliser la première entrée trouvée pour ce canal.
+  const replaced = [];
+  for (const [key, cfg] of Object.entries(agencies)) {
+    if (cfg.channel_id === channelId && key !== agenceName.toLowerCase()) {
+      replaced.push(cfg.name || key);
+      delete agencies[key];
+    }
+  }
+
   agencies[agenceName.toLowerCase()] = {
     name: agenceName,
     calendar_id: calendarId,
@@ -205,6 +217,14 @@ async function handleConfig(interaction) {
     )
     .setFooter({ text: 'Envoi auto agendas S & S+1 : 08h, 12h, 15h, 18h, 21h' })
     .setTimestamp();
+
+  if (replaced.length > 0) {
+    embed.addFields({
+      name: 'Ancienne configuration remplacée',
+      value: replaced.map((n) => `**${n}**`).join(', ') + ' (pause, horaires et plafond précédents perdus)',
+      inline: false,
+    });
+  }
 
   await interaction.editReply({ embeds: [embed] });
 }
