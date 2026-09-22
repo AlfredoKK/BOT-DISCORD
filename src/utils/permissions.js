@@ -15,6 +15,18 @@ function getAdminRoleName() {
   return String(process.env.ADMIN_ROLE_NAME || 'admin').trim().toLowerCase();
 }
 
+// Un nom de rôle correspond s'il est égal au nom configuré (après trim + minuscules),
+// ou s'il commence par ce nom et ne continue que par des lettres : "Admin", "ADMIN",
+// "Admins", "Administrateur", "Administrator" passent ; "Admin Support", "superadmin"
+// ou "admin-stagiaire" ne passent pas.
+function roleNameMatches(roleName, allowedName) {
+  const name = String(roleName || '').trim().toLowerCase();
+  if (!allowedName || !name) return false;
+  if (name === allowedName) return true;
+  if (!name.startsWith(allowedName)) return false;
+  return /^[\p{L}]+$/u.test(name.slice(allowedName.length));
+}
+
 function isAdmin(member) {
   if (!member) return false;
 
@@ -27,12 +39,19 @@ function isAdmin(member) {
   const allowedName = getAdminRoleName();
 
   return roles.some((role) =>
-    allowedIds.includes(role.id) || role.name.trim().toLowerCase() === allowedName
+    allowedIds.includes(role.id) || roleNameMatches(role.name, allowedName)
   );
 }
 
 async function requireAdmin(interaction) {
   if (isAdmin(interaction.member)) return true;
+
+  // Trace le refus pour pouvoir diagnostiquer un "Commande réservée aux administrateurs".
+  const who = interaction.user?.tag || interaction.user?.id || 'inconnu';
+  const roleNames = interaction.member?.roles?.cache?.map?.((r) => r.name) || [];
+  console.warn(
+    `[Permissions] /${interaction.commandName} refusé pour ${who} (guild ${interaction.guildId || '?'}) — rôles: ${roleNames.join(', ') || 'aucun'} ; attendu: ADMIN_ROLE_NAME="${getAdminRoleName()}"${getAdminRoleIds().length ? ` ou ADMIN_ROLE_IDS=${getAdminRoleIds().join(',')}` : ''}`
+  );
 
   const msg = 'Commande réservée aux administrateurs.';
   if (interaction.deferred || interaction.replied) {
@@ -43,4 +62,4 @@ async function requireAdmin(interaction) {
   return false;
 }
 
-module.exports = { isAdmin, requireAdmin, getAdminRoleIds, getAdminRoleName };
+module.exports = { isAdmin, requireAdmin, roleNameMatches, getAdminRoleIds, getAdminRoleName };
