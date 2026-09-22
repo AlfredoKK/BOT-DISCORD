@@ -1,5 +1,9 @@
 require('dotenv').config();
 
+// Tampon des 80 dernières lignes de console, joint aux rapports d'incident.
+// Doit être installé avant tout autre require pour capturer les logs de démarrage.
+require('./services/log-buffer').installLogBuffer();
+
 const { ensureDataDir } = require('./config/paths');
 ensureDataDir();
 
@@ -7,6 +11,17 @@ const { Client, Collection, GatewayIntentBits } = require('discord.js');
 const { Agent } = require('undici');
 const fs = require('fs');
 const path = require('path');
+const { reportIncident, setAlertClient } = require('./services/alerts');
+const { startHealthServer } = require('./health');
+
+// Signale un incident sans jamais bloquer ni lever d'exception.
+function alert(kind, error, context = {}) {
+  try {
+    reportIncident({ kind, error, context, client }).catch(() => {});
+  } catch {
+    // Le système d'alerte ne doit jamais faire tomber le bot.
+  }
+}
 
 const discordRestAgent = new Agent({
   connections: 4,
@@ -50,6 +65,19 @@ client.on('interactionCreate', async (interaction) => {
     await command.execute(interaction);
   } catch (err) {
     console.error(`Error executing /${interaction.commandName}:`, err);
+    let sousCommande = null;
+    try {
+      sousCommande = interaction.options?.getSubcommand?.(false) || null;
+    } catch {
+      sousCommande = null;
+    }
+    alert('commande', err, {
+      commande: interaction.commandName,
+      sousCommande,
+      utilisateur: interaction.user?.tag || interaction.user?.displayName || interaction.user?.username || 'inconnu',
+      channelId: interaction.channelId,
+      guildId: interaction.guildId,
+    });
     const msg = 'Une erreur est survenue lors de l\'exécution de la commande.';
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content: msg }).catch(() => {});
@@ -59,9 +87,30 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
+// Erreurs de la connexion Discord
+client.on('error', (err) => {
+  console.error('[Discord] Erreur client:', err);
+  alert('discord-erreur', err);
+});
+
+client.on('shardDisconnect', (event, shardId) => {
+  const code = event?.code ?? 'inconnu';
+  console.error(`[Discord] Shard ${shardId} déconnecté (code ${code})`);
+  alert('discord-déconnexion', new Error(`Shard ${shardId} déconnecté avec le code ${code}`), {
+    codeFermeture: code,
+    shardId,
+    raison: event?.reason || '',
+  });
+});
+
+client.on('shardResume', (shardId, replayedEvents) => {
+  console.log(`[Discord] Shard ${shardId} reconnecté (${replayedEvents} événement(s) rejoué(s))`);
+});
+
 client.once('clientReady', async () => {
   console.log(`Bot connecté en tant que ${client.user.tag}`);
   console.log(`${client.commands.size} commande(s) chargée(s)`);
+  setAlertClient(client);
 
   // Enregistre les commandes slash auprès de Discord à chaque démarrage,
   // pour que la liste visible dans Discord suive toujours le code déployé.
@@ -83,11 +132,16 @@ client.once('clientReady', async () => {
 // Global error handlers
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection:', err);
+  alert('rejet-non-géré', err);
 });
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught exception:', err);
+  alert('exception-non-capturée', err);
 });
+
+// Sonde de santé HTTP (GET /health) — ne bloque jamais le démarrage du bot
+startHealthServer({ client });
 
 // pm2 graceful shutdown
 process.on('SIGINT', () => {

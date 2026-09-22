@@ -3,9 +3,13 @@ const fs = require('fs');
 
 const { TOKEN_PATH } = require('../config/paths');
 const REDIRECT_URI = 'http://localhost:3000/oauth2callback';
+const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/spreadsheets',
+  // Alertes d'incident par e-mail (src/services/alerts.js). Un token obtenu
+  // avant l'ajout de ce scope ne l'a pas : relancer /rdvadmin auth + callback.
+  GMAIL_SEND_SCOPE,
 ];
 
 let oauth2Client = null;
@@ -75,9 +79,26 @@ function isAuthenticated() {
   return !!(token.access_token && token.refresh_token);
 }
 
+/**
+ * Indique si le token stocké contient la permission gmail.send
+ * (champ `scope` renvoyé par Google, liste séparée par des espaces).
+ */
+function hasGmailScope() {
+  try {
+    const token = readStoredToken();
+    const scopes = String(token.scope || '').split(/\s+/).filter(Boolean);
+    return scopes.includes(GMAIL_SEND_SCOPE);
+  } catch {
+    return false;
+  }
+}
+
 module.exports = {
   getOAuth2Client,
   generateAuthUrl,
   exchangeCode,
   isAuthenticated,
+  hasGmailScope,
+  SCOPES,
+  GMAIL_SEND_SCOPE,
 };

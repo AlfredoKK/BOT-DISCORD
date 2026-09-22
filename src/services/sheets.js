@@ -10,10 +10,25 @@ async function withRetry(fn, retries = 3) {
     try {
       return await fn();
     } catch (err) {
-      if (i === retries - 1) throw err;
+      if (i === retries - 1) {
+        reportGoogleAuthFailure(err);
+        throw err;
+      }
       const delay = Math.pow(2, i) * 1000;
       await new Promise((r) => setTimeout(r, delay));
     }
+  }
+}
+
+// Token Google expiré/révoqué : alerte (require paresseux pour éviter un cycle).
+function reportGoogleAuthFailure(err) {
+  try {
+    const alerts = require('./alerts');
+    if (alerts.isGoogleAuthError(err?.message)) {
+      alerts.reportIncident({ kind: 'google-auth', error: err, context: { service: 'sheets' } }).catch(() => {});
+    }
+  } catch {
+    // ne jamais bloquer l'appel métier
   }
 }
 

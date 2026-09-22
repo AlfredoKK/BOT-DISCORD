@@ -1,5 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
-const { generateAuthUrl, exchangeCode, isAuthenticated } = require('../services/google-auth');
+const { generateAuthUrl, exchangeCode, isAuthenticated, hasGmailScope } = require('../services/google-auth');
+const { reportIncident, getAlertStatus } = require('../services/alerts');
 const calendar = require('../services/calendar');
 const sheets = require('../services/sheets');
 const { JOUR_MAP } = require('../services/opening-hours');
@@ -68,6 +69,12 @@ const data = new SlashCommandBuilder()
       .addStringOption((opt) => opt.setName('vendredi').setDescription('ex: 09:00-19:00 ou fermé').setRequired(false))
       .addStringOption((opt) => opt.setName('samedi').setDescription('ex: 09:00-19:00 ou fermé').setRequired(false))
       .addStringOption((opt) => opt.setName('dimanche').setDescription('ex: 09:00-19:00 ou fermé').setRequired(false))
+  )
+  .addSubcommand((sub) =>
+    sub.setName('testalerte').setDescription('Envoyer une alerte d\'incident de test (e-mail + canal Discord)')
+  )
+  .addSubcommand((sub) =>
+    sub.setName('alertes').setDescription('Afficher la configuration des alertes d\'incident')
   );
 
 // ── Main execute ──
@@ -90,6 +97,8 @@ async function execute(interaction) {
       case 'pause': return await handlePause(interaction);
       case 'play': return await handlePlay(interaction);
       case 'horaires': return await handleHoraires(interaction);
+      case 'testalerte': return await handleTestAlerte(interaction);
+      case 'alertes': return await handleAlertes(interaction);
       default: return await interaction.reply({ content: 'Sous-commande inconnue.', ephemeral: true });
     }
   } catch (err) {
@@ -447,6 +456,87 @@ async function handleHoraires(interaction) {
   await interaction.editReply(`**Horaires mis à jour pour ${agency.name} :**\n${lines.join('\n')}`);
 }
 
-module.exports = { data, execute };
+// ── Alertes d'incident ──
+
+function formatChannelResult(result) {
+  if (!result) return '❌ non tenté';
+  return result.ok ? '✅ envoyé' : `❌ échec — ${result.error || 'raison inconnue'}`;
+}
+
+async function handleTestAlerte(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const user = interaction.user?.tag || interaction.user?.username || 'inconnu';
+
+  const result = await reportIncident({
+    kind: 'test',
+    error: new Error(`Alerte de test déclenchée par ${user}`),
+    context: {
+      commande: 'rdvadmin',
+      sousCommande: 'testalerte',
+      utilisateur: user,
+      channelId: interaction.channelId,
+      guildId: interaction.guildId,
+    },
+    client: interaction.client,
+    force: true,
+  });
+
+  const status = getAlertStatus();
+  const lines = [
+    '**Alerte de test envoyée**',
+    '',
+    `Discord (${status.channelId ? `<#${status.channelId}>` : 'canal non configuré'}) : ${formatChannelResult(result.discord)}`,
+    `E-mail (${status.emailTo.join(', ') || 'aucun destinataire'}) : ${formatChannelResult(result.email)}`,
+  ];
+  if (result.skipped) lines.push('', `⚠️ Envois ignorés : ${result.skipped}`);
+  if (result.email && result.email.scopeMissing) {
+    lines.push('', 'ℹ️ Le token Google n\'a pas la permission gmail.send : relancer `/rdvadmin auth` puis `/rdvadmin callback` avec le compte contact@licall.fr.');
+  }
+
+  await interaction.editReply(lines.join('\n'));
+}
+
+async function handleAlertes(interaction) {
+  const status = getAlertStatus();
+  const gmailScope = hasGmailScope();
+  const authValid = isAuthenticated();
+  const publicUrl = (process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '');
+
+  const embed = new EmbedBuilder()
+    .setTitle('Alertes d\'incident')
+    .setColor(status.enabled ? (gmailScope ? 0x34A853 : 0xF9AB00) : 0x6C757D)
+    .addFields(
+      { name: 'Activées', value: status.enabled ? 'Oui' : 'Non (ALERTS_ENABLED=false)', inline: true },
+      { name: 'Anti-spam', value: `${status.cooldownMinutes} min par incident identique`, inline: true },
+      { name: 'Canal Discord', value: status.channelId ? `<#${status.channelId}>` : 'Non configuré (ALERT_CHANNEL_ID)', inline: false },
+      { name: 'E-mail destinataire(s)', value: status.emailTo.join(', ') || 'Aucun', inline: false },
+      { name: 'E-mail expéditeur', value: status.emailFrom, inline: true },
+      {
+        name: 'Permission gmail.send',
+        value: !authValid
+          ? '❌ Google non authentifié'
+          : gmailScope ? '✅ présente dans le token' : '⚠️ absente — relancer `/rdvadmin auth` puis `/rdvadmin callback` avec contact@licall.fr',
+        inline: false,
+      },
+      { name: 'Commit déployé', value: `\`${process.env.RAILWAY_GIT_COMMIT_SHA || 'inconnu'}\``, inline: true },
+    )
+    .setTimestamp();
+
+  if (publicUrl) {
+    embed.addFields({ name: 'Sonde de santé', value: `${publicUrl}/health`, inline: false });
+  }
+
+  const sent = Object.entries(status.lastSentBySignature);
+  if (sent.length > 0) {
+    const recent = sent
+      .sort((a, b) => (a[1] < b[1] ? 1 : -1))
+      .slice(0, 5)
+      .map(([sig, at]) => `\`${sig.slice(0, 60)}\` — ${new Date(at).toLocaleString('fr-FR', { timeZone: 'Europe/Paris' })}`)
+      .join('\n');
+    embed.addFields({ name: 'Derniers incidents envoyés (session)', value: recent.slice(0, 1024), inline: false });
+  }
+
+  await interaction.reply({ embeds: [embed], ephemeral: true });
+}
 
 module.exports = { data, execute };
