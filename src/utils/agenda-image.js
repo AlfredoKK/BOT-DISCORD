@@ -2,19 +2,21 @@ const { createCanvas, GlobalFonts } = require('@napi-rs/canvas');
 const fs = require('fs');
 const { getWeekDaysSunday, formatDate, DAY_ABBREVS } = require('./date-utils');
 
-// Register font
-const FONT_PATHS = [
-  '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
-  '/System/Library/Fonts/Supplemental/Arial.ttf',
-  '/System/Library/Fonts/Helvetica.ttc',
-];
-for (const fp of FONT_PATHS) {
-  if (fs.existsSync(fp)) {
-    GlobalFonts.registerFromPath(fp, 'Agenda');
-    break;
-  }
+// Police embarquée dans le dépôt (DejaVu Sans, licence libre, voir assets/fonts/LICENSE-DejaVu.txt).
+// Indispensable : les serveurs Linux minimalistes (Railway) n'ont aucune police système,
+// et sans police enregistrée le canvas dessine les blocs mais aucun texte.
+const path = require('path');
+const FONT_DIR = path.join(__dirname, '../../assets/fonts');
+const BUNDLED_FONTS = ['DejaVuSans.ttf', 'DejaVuSans-Bold.ttf'];
+let registered = 0;
+for (const file of BUNDLED_FONTS) {
+  const fp = path.join(FONT_DIR, file);
+  if (fs.existsSync(fp) && GlobalFonts.registerFromPath(fp, 'Agenda')) registered += 1;
 }
-const FONT = GlobalFonts.has('Agenda') ? 'Agenda' : 'Arial, Helvetica, sans-serif';
+if (registered === 0) {
+  console.error('[AGENDA] Aucune police embarquée trouvée dans assets/fonts : le texte des agendas sera invisible.');
+}
+const FONT = GlobalFonts.has('Agenda') ? 'Agenda' : 'sans-serif';
 
 // ── Layout (extra-wide for Discord readability) ──
 const HOUR_START = 7;
