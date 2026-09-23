@@ -211,6 +211,14 @@ async function checkAndSend(client) {
     }
     if (!result || !result.ok) {
       failures.push({ name: agency.name || key, error: result?.error || 'erreur inconnue' });
+      // Avis court par agence en échec (dédupliqué par signature dans notifyOps)
+      require('./alerts').notifyOps({
+        kind: 'Agenda automatique non envoyé',
+        message: `${agency.name || key} à ${hours}:00 : ${result?.error || 'erreur inconnue'}`,
+        level: 'warn',
+        context: { agence: agency.name || key, channelId: agency.channel_id, conseil: 'Vérifier que le bot voit le canal avec les permissions Voir le salon, Envoyer des messages, Joindre des fichiers.' },
+        client,
+      }).catch(() => {});
     }
     // 5 second pause between agencies to avoid saturating network and blocking user commands
     await delay(5000);

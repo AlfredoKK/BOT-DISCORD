@@ -380,6 +380,87 @@ async function reportIncident({ kind = 'inconnu', error, context = {}, client, f
   return result;
 }
 
+// ── Avis d'exploitation : échecs fonctionnels visibles par l'utilisateur ──
+// Refus de permission, Sheets non écrit, calendrier en erreur, config refusée, agenda
+// non envoyé… Ils partent dans le canal Discord uniquement (pas d'e-mail, pas de pièce
+// jointe), avec une déduplication par signature (NOTICE_COOLDOWN_MINUTES, défaut 30).
+
+const NOTICE_COOLDOWN_MINUTES_DEFAULT = 30;
+const lastNoticeBySignature = new Map();
+
+function getNoticeConfig() {
+  const raw = Number(process.env.NOTICE_COOLDOWN_MINUTES);
+  return {
+    enabled: parseBool(process.env.ALERTS_ENABLED, true) && parseBool(process.env.OPS_NOTICES_ENABLED, true),
+    cooldownMinutes: Number.isFinite(raw) && raw >= 0 ? raw : NOTICE_COOLDOWN_MINUTES_DEFAULT,
+  };
+}
+
+const NOTICE_COLORS = { info: 0x3B82F6, warn: 0xF59E0B, error: 0xDC3545 };
+
+async function notifyOps({ kind = 'avis', message = '', context = {}, level = 'warn', client, force = false } = {}) {
+  const result = { sent: false, discord: { ok: false, error: 'non tenté' } };
+  try {
+    const config = getConfig();
+    const notice = getNoticeConfig();
+    const text = String(message || '').trim() || '(sans message)';
+    const signature = `${kind}|${text.slice(0, SIGNATURE_MESSAGE_LENGTH)}`;
+    result.signature = signature;
+
+    console.warn(`[NOTICE] ${kind}: ${text}`);
+
+    if (!notice.enabled) { result.skipped = 'désactivé'; result.discord = { ok: false, error: result.skipped }; return result; }
+
+    const now = Date.now();
+    const last = lastNoticeBySignature.get(signature);
+    if (!force && last && now - last < notice.cooldownMinutes * 60 * 1000) {
+      result.skipped = 'cooldown';
+      result.discord = { ok: false, error: result.skipped };
+      return result;
+    }
+    lastNoticeBySignature.set(signature, now);
+    if (lastNoticeBySignature.size > 300) {
+      const oldest = [...lastNoticeBySignature.entries()].sort((a, b) => a[1] - b[1]).slice(0, 150);
+      for (const [sig] of oldest) lastNoticeBySignature.delete(sig);
+    }
+
+    const discordClient = client || defaultClient;
+    if (!config.channelId) { result.discord = { ok: false, error: 'ALERT_CHANNEL_ID non défini' }; return result; }
+    if (!discordClient) { result.discord = { ok: false, error: 'client Discord indisponible' }; return result; }
+
+    const channel = await discordClient.channels.fetch(config.channelId);
+    if (!channel || typeof channel.send !== 'function') {
+      result.discord = { ok: false, error: `canal ${config.channelId} introuvable ou non textuel` };
+      return result;
+    }
+
+    const ctx = context || {};
+    const commandLabel = ctx.commande ? `/${ctx.commande}${ctx.sousCommande ? ` ${ctx.sousCommande}` : ''}` : '—';
+    const icon = level === 'error' ? '❌' : level === 'info' ? 'ℹ️' : '⚠️';
+    const embed = new EmbedBuilder()
+      .setTitle(`${icon} ${truncate(kind, 200)}`)
+      .setColor(NOTICE_COLORS[level] || NOTICE_COLORS.warn)
+      .setDescription(truncate(text, 1500))
+      .addFields(
+        { name: 'Commande', value: truncate(commandLabel, 100), inline: true },
+        { name: 'Agence', value: truncate(ctx.agence || '—', 100), inline: true },
+        { name: 'Utilisateur', value: truncate(ctx.utilisateur || '—', 100), inline: true },
+      )
+      .setTimestamp();
+    if (ctx.channelId) embed.addFields({ name: 'Canal', value: `<#${ctx.channelId}>`, inline: true });
+    if (ctx.eventId) embed.addFields({ name: 'ID événement', value: `\`${truncate(ctx.eventId, 60)}\``, inline: true });
+    if (ctx.conseil) embed.addFields({ name: 'Conseil', value: truncate(ctx.conseil, 500), inline: false });
+
+    await channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
+    result.sent = true;
+    result.discord = { ok: true };
+  } catch (err) {
+    try { console.warn(`[NOTICE] Envoi Discord échoué (${kind}): ${err?.message || err}`); } catch { /* ignore */ }
+    result.discord = { ok: false, error: err?.message || String(err) };
+  }
+  return result;
+}
+
 /** Configuration courante pour l'affichage (/rdvadmin alertes). */
 function getAlertStatus() {
   const config = getConfig();
@@ -398,11 +479,13 @@ function getAlertStatus() {
 
 function resetAlertStateForTests() {
   lastSentBySignature.clear();
+  lastNoticeBySignature.clear();
   gmailScopeWarningLogged = false;
   defaultClient = null;
 }
 
 module.exports = {
+  notifyOps,
   buildIncidentReport,
   reportIncident,
   getAlertStatus,

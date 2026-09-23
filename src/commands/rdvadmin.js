@@ -12,6 +12,7 @@ const {
   requireAgency,
 } = require('../utils/rdv-helpers');
 const { findAgencyConflicts, formatConflicts, verifySheetTab } = require('../services/agency-check');
+const { notifyOps } = require('../services/alerts');
 
 // ── Slash command definition ──
 // Commande réservée aux administrateurs (voir src/utils/permissions.js).
@@ -197,6 +198,7 @@ async function handleConfig(interaction) {
   const tabCheck = await verifySheetTab(spreadsheetId, resolvedSheetName);
   if (!tabCheck.ok) {
     const tabs = tabCheck.tabs.length ? `\nOnglets disponibles : ${tabCheck.tabs.map((t) => `\`${t}\``).join(', ')}` : '';
+    notifyOps({ kind: 'Configuration refusée', message: `${agenceName} : ${tabCheck.reason}.`, context: { commande: 'rdvadmin', sousCommande: 'config', utilisateur: interaction.member?.displayName || interaction.user?.username, channelId, agence: agenceName }, client: interaction.client }).catch(() => {});
     return interaction.editReply(`🚫 Configuration refusée : ${tabCheck.reason}.${tabs}`);
   }
   if (!resolvedSheetName) resolvedSheetName = tabCheck.resolved || '';
@@ -212,6 +214,7 @@ async function handleConfig(interaction) {
     return !other || other.channel_id !== channelId;
   });
   if (foreign.length > 0) {
+    notifyOps({ kind: 'Configuration refusée', message: `${agenceName} : ressources déjà utilisées par une autre agence.\n${formatConflicts(foreign)}`, context: { commande: 'rdvadmin', sousCommande: 'config', utilisateur: interaction.member?.displayName || interaction.user?.username, channelId, agence: agenceName }, client: interaction.client }).catch(() => {});
     return interaction.editReply(`🚫 Configuration refusée, ressources déjà utilisées par une autre agence :\n${formatConflicts(foreign)}`);
   }
 

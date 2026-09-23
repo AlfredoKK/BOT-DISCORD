@@ -74,6 +74,7 @@ async function execute(interaction) {
 
     sendAgendaImage(interaction, channel, agency, semaine).catch((err) => {
       console.error(`[AGENDA] Background /agenda failed for ${agency.name} ${semaine}:`, err);
+      require('../services/alerts').notifyOps({ kind: 'Agenda non envoyé', message: `/agenda ${semaine} a échoué : ${err.message}`, level: 'error', context: { commande: 'agenda', utilisateur: interaction.member?.displayName || interaction.user?.username, channelId: interaction.channelId, agence: agency.name }, client: interaction.client }).catch(() => {});
     });
 
     return null;
