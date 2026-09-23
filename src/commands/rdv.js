@@ -24,6 +24,27 @@ const {
   vehicleLabel,
 } = require('../utils/rdv-helpers');
 const { verifySheetTab, brokenSheetConfigMessage } = require('../services/agency-check');
+const { notifyOps } = require('../services/alerts');
+
+// Avis court dans le canal d'alertes pour un échec fonctionnel (jamais bloquant).
+function notice(interaction, kind, message, extra = {}) {
+  const agency = extra.agency;
+  notifyOps({
+    kind,
+    message,
+    level: extra.level || 'warn',
+    context: {
+      commande: 'rdv',
+      sousCommande: interaction.options?.getSubcommand?.(false) || '',
+      utilisateur: interaction.member?.displayName || interaction.user?.globalName || interaction.user?.username || '',
+      channelId: interaction.channelId,
+      agence: agency?.name || '',
+      eventId: extra.eventId || '',
+      conseil: extra.conseil || '',
+    },
+    client: interaction.client,
+  }).catch(() => {});
+}
 
 // ── Slash command definition ──
 // Commande ouverte aux prospecteurs : créer, modifier, annuler, confirmer un RDV.
@@ -150,7 +171,10 @@ function getPreservedCalendarPrefix(sheetRow, fallbackTitle) {
 async function handleAdd(interaction) {
   await interaction.deferReply();
   const agency = requireAgency(interaction);
-  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence. Un administrateur doit utiliser `/rdvadmin config` ici d\'abord.');
+  if (!agency) {
+    notice(interaction, 'Canal sans agence', 'Commande lancée dans un canal qui n\'est lié à aucune agence.', { conseil: 'Un administrateur doit lancer /rdvadmin config dans ce canal, ou la commande a été lancée au mauvais endroit.' });
+    return interaction.editReply('Ce canal n\'est lié à aucune agence. Un administrateur doit utiliser `/rdvadmin config` ici d\'abord.');
+  }
 
   if (agency.paused) {
     return interaction.editReply(`⏸️ L'agence **${agency.name}** est actuellement en pause. Aucun RDV ne peut être ajouté. Un administrateur doit utiliser \`/rdvadmin play\` ici pour reprendre.`);
@@ -187,6 +211,7 @@ async function handleAdd(interaction) {
   const sheetCheck = await verifySheetTab(agency.spreadsheet_id, agency.sheet_name);
   if (!sheetCheck.ok) {
     console.error(`[ADD] Sheets config invalide pour ${agency.name}: ${sheetCheck.reason}`);
+    notice(interaction, 'Config Sheets invalide', `${sheetCheck.reason}. Aucun RDV créé.`, { agency, level: 'error', conseil: 'Corriger avec /rdvadmin config dans ce canal, puis /rdvadmin verifier.' });
     return interaction.editReply(brokenSheetConfigMessage(agency, sheetCheck));
   }
 
@@ -235,6 +260,7 @@ async function handleAdd(interaction) {
   } catch (sheetErr) {
     console.error(`[ADD] Sheet append FAILED:`, sheetErr.message);
     sheetStatus = `Erreur: ${sheetErr.message}`;
+    notice(interaction, 'Sheets non écrit', `RDV créé dans Calendar mais la ligne Sheets a échoué : ${sheetErr.message}`, { agency, eventId, level: 'error', conseil: 'La ligne est à ajouter à la main ou via un rattrapage. Vérifier l\'onglet avec /rdvadmin verifier.' });
   }
 
   const calLink = getCalendarLink(eventId, agency.calendar_id);
@@ -267,7 +293,10 @@ async function handleAdd(interaction) {
 async function handleDom(interaction) {
   await interaction.deferReply();
   const agency = requireAgency(interaction);
-  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence. Un administrateur doit utiliser `/rdvadmin config` ici d\'abord.');
+  if (!agency) {
+    notice(interaction, 'Canal sans agence', 'Commande lancée dans un canal qui n\'est lié à aucune agence.', { conseil: 'Un administrateur doit lancer /rdvadmin config dans ce canal, ou la commande a été lancée au mauvais endroit.' });
+    return interaction.editReply('Ce canal n\'est lié à aucune agence. Un administrateur doit utiliser `/rdvadmin config` ici d\'abord.');
+  }
 
   if (!agency.dom_rdv_enabled) {
     return interaction.editReply('🚫 La fonctionnalité RDV à domicile n\'est pas activée pour cette agence.');
@@ -304,6 +333,7 @@ async function handleDom(interaction) {
   const sheetCheck = await verifySheetTab(agency.spreadsheet_id, agency.sheet_name);
   if (!sheetCheck.ok) {
     console.error(`[DOM] Sheets config invalide pour ${agency.name}: ${sheetCheck.reason}`);
+    notice(interaction, 'Config Sheets invalide', `${sheetCheck.reason}. Aucun RDV créé.`, { agency, level: 'error', conseil: 'Corriger avec /rdvadmin config dans ce canal, puis /rdvadmin verifier.' });
     return interaction.editReply(brokenSheetConfigMessage(agency, sheetCheck));
   }
 
@@ -342,6 +372,7 @@ async function handleDom(interaction) {
   } catch (sheetErr) {
     console.error(`[DOM] Sheet append FAILED:`, sheetErr.message);
     sheetStatus = `Erreur: ${sheetErr.message}`;
+    notice(interaction, 'Sheets non écrit', `RDV DOM créé dans Calendar mais la ligne Sheets a échoué : ${sheetErr.message}`, { agency, eventId, level: 'error' });
   }
 
   const calLink = getCalendarLink(eventId, agency.calendar_id);
@@ -410,6 +441,7 @@ async function handleAnnuler(interaction) {
     console.log(`[ANNULER] Calendar event ${eventId} updated`);
   } catch (calErr) {
     console.error(`[ANNULER] Calendar failed:`, calErr.message);
+    notice(interaction, 'Calendrier en erreur', `Mise à jour Calendar impossible : ${calErr.message}`, { agency, eventId, level: 'error' });
     return interaction.editReply(`Erreur calendrier: ${calErr.message}`);
   }
 
@@ -426,6 +458,7 @@ async function handleAnnuler(interaction) {
     }
   } catch (e) {
     console.error(`[ANNULER] Sheet failed:`, e.message);
+    notice(interaction, 'Sheets non mis à jour', `Annulation faite dans Calendar mais pas dans Sheets : ${e.message}`, { agency, eventId, level: 'error' });
   }
 
   const currentDetails = parseManagedRdvEvent(eventData);
@@ -480,6 +513,7 @@ async function handleVendu(interaction) {
     console.log(`[VENDU] Calendar event ${eventId} updated`);
   } catch (calErr) {
     console.error(`[VENDU] Calendar failed:`, calErr.message);
+    notice(interaction, 'Calendrier en erreur', `Mise à jour Calendar impossible : ${calErr.message}`, { agency, eventId, level: 'error' });
     return interaction.editReply(`Erreur calendrier: ${calErr.message}`);
   }
 
@@ -496,6 +530,7 @@ async function handleVendu(interaction) {
     }
   } catch (e) {
     console.error(`[VENDU] Sheet failed:`, e.message);
+    notice(interaction, 'Sheets non mis à jour', `Statut VENDU posé dans Calendar mais pas dans Sheets : ${e.message}`, { agency, eventId, level: 'error' });
   }
 
   const currentDetails = parseManagedRdvEvent(eventData);
@@ -553,6 +588,7 @@ async function handleSupprimer(interaction) {
     console.log(`[SUPPRIMER] Calendar event ${eventId} deleted`);
   } catch (calErr) {
     console.error(`[SUPPRIMER] Calendar delete failed:`, calErr.message);
+    notice(interaction, 'Calendrier en erreur', `Suppression Calendar impossible : ${calErr.message}`, { agency, eventId, level: 'error' });
     return interaction.editReply(`Erreur suppression calendrier: ${calErr.message}`);
   }
 
@@ -565,6 +601,7 @@ async function handleSupprimer(interaction) {
     }
   } catch (sheetErr) {
     console.error(`[SUPPRIMER] Sheet delete failed:`, sheetErr.message);
+    notice(interaction, 'Sheets non mis à jour', `Événement supprimé dans Calendar mais la ligne Sheets n\'a pas pu être supprimée : ${sheetErr.message}`, { agency, eventId, level: 'error' });
   }
 
   const currentDetails = eventData ? parseManagedRdvEvent(eventData) : null;
@@ -621,6 +658,7 @@ async function handleConf(interaction) {
     console.log(`[CONF] Sheet row ${found.index} updated to ${confStatut}`);
   } catch (e) {
     console.error(`[CONF] Failed:`, e.message);
+    notice(interaction, 'Sheets non mis à jour', `Confirmation impossible côté Sheets : ${e.message}`, { agency, eventId, level: 'error' });
     return interaction.editReply(`Erreur: ${e.message}`);
   }
 
@@ -820,6 +858,7 @@ async function handleModifier(interaction) {
     console.log(`[MODIFIER] Sheet row ${currentSheetRow.index} updated${isRebook ? ' with reset state' : ''}`);
   } catch (sheetErr) {
     console.error(`[MODIFIER] Sheet update failed:`, sheetErr.message);
+    notice(interaction, 'Sheets non mis à jour', `Modification faite dans Calendar mais pas dans Sheets : ${sheetErr.message}`, { agency, eventId, level: 'error' });
     return interaction.editReply(`Le calendrier a été mis à jour mais le Sheets a échoué sur l'ID \`${eventId}\`. Vérifie la ligne avant de refaire une modification.`);
   }
 

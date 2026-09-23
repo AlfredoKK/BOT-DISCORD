@@ -69,6 +69,16 @@ async function requireAdmin(interaction) {
     `[Permissions] /${interaction.commandName} refusé pour ${who} (guild ${interaction.guildId || '?'}) — rôles: ${roleNames.join(', ') || 'aucun'} ; attendu: rôles ${getAdminRoleNames().map((n) => `"${n}"`).join(' ou ')}${getAdminRoleIds().length ? ` ou ADMIN_ROLE_IDS=${getAdminRoleIds().join(',')}` : ''}`
   );
 
+  try {
+    const { notifyOps } = require('../services/alerts');
+    notifyOps({
+      kind: 'Refus de permission',
+      message: `${who} a tenté /${interaction.commandName}${interaction.options?.getSubcommand?.(false) ? ` ${interaction.options.getSubcommand(false)}` : ''} sans rôle autorisé.`,
+      context: { commande: interaction.commandName, sousCommande: interaction.options?.getSubcommand?.(false) || '', utilisateur: who, channelId: interaction.channelId, conseil: `Rôles de la personne : ${roleNames.join(', ') || 'aucun'}. Rôles acceptés : ${getAdminRoleNames().join(', ')}.` },
+      client: interaction.client,
+    }).catch(() => {});
+  } catch { /* jamais bloquant */ }
+
   const msg = 'Commande réservée aux administrateurs.';
   if (interaction.deferred || interaction.replied) {
     await interaction.editReply({ content: msg }).catch(() => {});

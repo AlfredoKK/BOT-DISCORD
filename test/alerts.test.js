@@ -267,3 +267,31 @@ test('sans ALERT_CHANNEL_ID, Discord est ignoré proprement et setAlertClient se
 test.after(() => {
   for (const level of Object.keys(originalConsole)) console[level] = originalConsole[level];
 });
+
+test('notifyOps sends a short Discord notice, dedupes by signature, and never throws', async () => {
+  const alerts = require('../src/services/alerts');
+  alerts.resetAlertStateForTests();
+  const previous = process.env.ALERT_CHANNEL_ID;
+  process.env.ALERT_CHANNEL_ID = '123';
+  const sent = [];
+  const client = { channels: { fetch: async () => ({ send: async (payload) => { sent.push(payload); } }) } };
+  try {
+    const first = await alerts.notifyOps({ kind: 'Refus de permission', message: 'X a tenté /rdvadmin play', context: { commande: 'rdvadmin', sousCommande: 'play', utilisateur: 'X' }, client });
+    assert.equal(first.sent, true);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].embeds.length, 1);
+    assert.equal(sent[0].files, undefined);
+    const second = await alerts.notifyOps({ kind: 'Refus de permission', message: 'X a tenté /rdvadmin play', client });
+    assert.equal(second.sent, false);
+    assert.equal(second.skipped, 'cooldown');
+    const forced = await alerts.notifyOps({ kind: 'Refus de permission', message: 'X a tenté /rdvadmin play', client, force: true });
+    assert.equal(forced.sent, true);
+    const broken = { channels: { fetch: async () => { throw new Error('boom'); } } };
+    const failed = await alerts.notifyOps({ kind: 'autre', message: 'y', client: broken });
+    assert.equal(failed.sent, false);
+    assert.match(failed.discord.error, /boom/);
+  } finally {
+    if (previous === undefined) delete process.env.ALERT_CHANNEL_ID; else process.env.ALERT_CHANNEL_ID = previous;
+    alerts.resetAlertStateForTests();
+  }
+});
