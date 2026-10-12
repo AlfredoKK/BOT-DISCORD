@@ -241,6 +241,33 @@ function shouldAlertForFailures(failedCount, totalCount) {
   return failedCount >= FAILED_AGENCIES_ALERT_MIN || failedCount / totalCount >= FAILED_AGENCIES_ALERT_RATIO;
 }
 
+// ── Rapport de cohérence Sheets ↔ base (double écriture Supabase) ──
+// Tous les jours à COHERENCE_REPORT_HOUR:00 (défaut 22h Paris), seulement
+// quand DB_WRITE_ENABLED=true. Indépendant de l'envoi des agendas.
+let lastCoherenceDay = null;
+let coherenceRunning = false;
+
+async function maybeRunCoherence(client) {
+  const { isDbWriteEnabled } = require('./supabase');
+  if (!isDbWriteEnabled()) return;
+  const { hours, minutes } = getParisTime();
+  const { getReportHour, runCoherenceReport } = require('./coherence');
+  if (hours !== getReportHour() || minutes !== 0) return;
+  const today = new Date().toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris' });
+  if (lastCoherenceDay === today || coherenceRunning) return;
+  lastCoherenceDay = today;
+  coherenceRunning = true;
+  try {
+    console.log('[Coherence] Rapport quotidien Sheets ↔ base');
+    await runCoherenceReport({ agencies: loadAgencies(), client, post: true, trigger: 'auto' });
+  } catch (err) {
+    console.error('[Coherence] Erreur:', err.message);
+    alert('coherence', err, { phase: 'rapport quotidien' }, client);
+  } finally {
+    coherenceRunning = false;
+  }
+}
+
 function getLastRunAt() {
   return lastRunAt;
 }
@@ -262,6 +289,7 @@ function startScheduler(client) {
 
   // Check every 60 seconds
   schedulerInterval = setInterval(() => {
+    maybeRunCoherence(client).catch((err) => console.error('[Coherence] Erreur:', err.message));
     if (schedulerRunning) {
       console.log('[Scheduler] Envoi précédent encore en cours, skip.');
       return;
@@ -300,4 +328,5 @@ module.exports = {
   getLastRunAt,
   getLastCheckAt,
   shouldAlertForFailures,
+  maybeRunCoherence,
 };

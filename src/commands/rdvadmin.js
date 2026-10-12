@@ -13,6 +13,29 @@ const {
 } = require('../utils/rdv-helpers');
 const { findAgencyConflicts, formatConflicts, verifySheetTab } = require('../services/agency-check');
 const { notifyOps } = require('../services/alerts');
+const rdvDb = require('../services/rdv-db');
+const { getDbStatus, getDbForAgency, isDbWriteEnabled, COMPANIES } = require('../services/supabase');
+const { runCoherenceReport, getReportHour } = require('../services/coherence');
+
+function actorOf(interaction) {
+  return {
+    discordUserId: interaction.user?.id || null,
+    displayName: interaction.member?.displayName || interaction.user?.globalName || interaction.user?.username || '',
+  };
+}
+
+/** Miroir d'une agence vers sa base (quand DB_WRITE_ENABLED=true). Jamais bloquant. */
+async function mirrorAgency(interaction, key, cfg, action) {
+  const result = await rdvDb.syncAgencyToDb({
+    agency: { key, ...cfg },
+    guildId: interaction.guildId,
+    actor: actorOf(interaction),
+    client: interaction.client,
+    action,
+  });
+  if (!result || result.skipped) return '';
+  return result.ok ? `\nBase ${result.label} : synchronisée.` : `\nBase ${result.label || ''} : ⚠️ ${result.error}`;
+}
 
 // ── Slash command definition ──
 // Commande réservée aux administrateurs (voir src/utils/permissions.js).
@@ -75,6 +98,17 @@ const data = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub.setName('alertes').setDescription('Afficher la configuration des alertes d\'incident')
+  )
+  .addSubcommand((sub) =>
+    sub.setName('db').setDescription('État de la double écriture Supabase (bases Licall et Kall Kall)')
+  )
+  .addSubcommand((sub) =>
+    sub.setName('coherence').setDescription('Lancer maintenant le rapport de cohérence Sheets ↔ base')
+  )
+  .addSubcommand((sub) =>
+    sub.setName('sdr').setDescription('Rattacher un membre Discord à un SDR de la base de cette agence')
+      .addUserOption((opt) => opt.setName('membre').setDescription('Membre Discord').setRequired(true))
+      .addStringOption((opt) => opt.setName('nom').setDescription('Nom en base (Prénom NOM). Vide = pseudo Discord').setRequired(false))
   );
 
 // ── Main execute ──
@@ -99,6 +133,9 @@ async function execute(interaction) {
       case 'horaires': return await handleHoraires(interaction);
       case 'testalerte': return await handleTestAlerte(interaction);
       case 'alertes': return await handleAlertes(interaction);
+      case 'db': return await handleDb(interaction);
+      case 'coherence': return await handleCoherence(interaction);
+      case 'sdr': return await handleSdr(interaction);
       default: return await interaction.reply({ content: 'Sous-commande inconnue.', ephemeral: true });
     }
   } catch (err) {
@@ -237,9 +274,12 @@ async function handleConfig(interaction) {
     granularite: 30,
     timezone: 'Europe/Paris',
     channel_id: channelId,
+    guild_id: interaction.guildId || undefined,
     sheet_name: resolvedSheetName,
   };
   saveAgencies(agencies);
+
+  const dbNote = await mirrorAgency(interaction, agenceName.toLowerCase(), agencies[agenceName.toLowerCase()], 'config');
 
   const embed = new EmbedBuilder()
     .setTitle(`Agence ${agenceName} configurée`)
@@ -261,6 +301,7 @@ async function handleConfig(interaction) {
       inline: false,
     });
   }
+  if (dbNote) embed.addFields({ name: 'Base Supabase', value: dbNote.trim(), inline: false });
 
   await interaction.editReply({ embeds: [embed] });
 }
@@ -275,6 +316,11 @@ async function handleDeconfig(interaction) {
   delete agencies[agency.key];
   saveAgencies(agencies);
   await interaction.reply(`Agence **${agency.name}** supprimée de ce canal.`);
+
+  const result = await rdvDb.unlinkAgencyInDb({ agency, guildId: interaction.guildId, actor: actorOf(interaction), client: interaction.client });
+  if (result && !result.skipped) {
+    await interaction.followUp({ content: result.ok ? `Base ${result.label} : agence détachée du canal et passée inactive.` : `Base : ⚠️ ${result.error}`, ephemeral: true }).catch(() => {});
+  }
 }
 
 // ── Verifier ──
@@ -383,7 +429,8 @@ async function handlePause(interaction) {
   saveAgencies(agencies);
   console.log(`[PAUSE] Agence ${agency.name} mise en pause par ${interaction.user?.tag || interaction.user?.id}`);
 
-  await interaction.editReply(`⏸️ L'agence **${agency.name}** est maintenant **en pause**. Plus aucun RDV ne sera accepté jusqu'à \`/rdvadmin play\`.`);
+  const dbNote = await mirrorAgency(interaction, agency.key, agencies[agency.key], 'pause');
+  await interaction.editReply(`⏸️ L'agence **${agency.name}** est maintenant **en pause**. Plus aucun RDV ne sera accepté jusqu'à \`/rdvadmin play\`.${dbNote}`);
 }
 
 async function handlePlay(interaction) {
@@ -398,7 +445,8 @@ async function handlePlay(interaction) {
   saveAgencies(agencies);
   console.log(`[PLAY] Agence ${agency.name} réactivée par ${interaction.user?.tag || interaction.user?.id}`);
 
-  await interaction.editReply(`▶️ L'agence **${agency.name}** est maintenant **active**. Les RDV sont de nouveau acceptés.`);
+  const dbNote = await mirrorAgency(interaction, agency.key, agencies[agency.key], 'play');
+  await interaction.editReply(`▶️ L'agence **${agency.name}** est maintenant **active**. Les RDV sont de nouveau acceptés.${dbNote}`);
 }
 
 // ── Horaires ──
@@ -457,7 +505,81 @@ async function handleHoraires(interaction) {
     return `**${day.charAt(0).toUpperCase() + day.slice(1)}** : ${schedule}`;
   });
 
-  await interaction.editReply(`**Horaires mis à jour pour ${agency.name} :**\n${lines.join('\n')}`);
+  const dbNote = await mirrorAgency(interaction, agency.key, cfg, 'horaires');
+  await interaction.editReply(`**Horaires mis à jour pour ${agency.name} :**\n${lines.join('\n')}${dbNote}`);
+}
+
+// ── Supabase : état, cohérence, SDR ──
+
+async function handleDb(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const status = getDbStatus();
+  const agencies = loadAgencies();
+  const enabled = isDbWriteEnabled();
+
+  const lines = [];
+  for (const [company, s] of Object.entries(status)) {
+    const agencyCount = Object.values(agencies).filter((a) => getDbForAgency(a, a.guild_id || null).company === company).length;
+    if (!s.configured) {
+      lines.push(`❌ **${s.label}** : non configurée (${COMPANIES[company].urlVar} / ${COMPANIES[company].keyVar}) — ${agencyCount} agence(s) routée(s)`);
+      continue;
+    }
+    const route = getDbForAgency({ societe: company }, null);
+    try {
+      const agences = await route.db.count('agences', { actif: 'eq.true' });
+      const rdv = await route.db.count('rdv');
+      const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const journalOk = await route.db.count('bot_journal', { at: `gte.${since}`, db_ok: 'eq.true' });
+      const journalKo = await route.db.count('bot_journal', { at: `gte.${since}`, db_ok: 'eq.false' });
+      lines.push(`✅ **${s.label}** : ${agences} agences actives, ${rdv} RDV, 24 h : ${journalOk} écriture(s) ok / ${journalKo} en échec — ${agencyCount} agence(s) du bot routée(s)`);
+    } catch (err) {
+      lines.push(`⚠️ **${s.label}** : configurée mais injoignable (${err.message}) — ${agencyCount} agence(s) routée(s)`);
+    }
+  }
+  const unrouted = Object.values(agencies).filter((a) => !getDbForAgency(a, a.guild_id || null).company).map((a) => a.name);
+  if (unrouted.length) lines.push(`⚠️ Agences sans société déterminable : ${unrouted.join(', ')}`);
+
+  await interaction.editReply([
+    `**Double écriture Supabase** : ${enabled ? '🟢 ACTIVE (DB_WRITE_ENABLED=true)' : '⚪ coupée (DB_WRITE_ENABLED absent ou false)'}`,
+    `Rapport de cohérence : tous les jours à ${getReportHour()}:00 (Paris) quand la double écriture est active, ou \`/rdvadmin coherence\`.`,
+    '',
+    ...lines,
+  ].join('\n'));
+}
+
+async function handleCoherence(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const agencies = loadAgencies();
+  const report = await runCoherenceReport({ agencies, client: interaction.client, post: true, trigger: 'manuel' });
+  const summary = Object.values(report.companies).map((c) =>
+    `**${c.label}** : ${c.compared} RDV comparés — absents base ${c.missingInDb}, absents Sheets ${c.missingInSheet}, écarts statut ${c.statutDiff}, écarts confirmation ${c.confDiff}${c.errors.length ? `, ${c.errors.length} erreur(s)` : ''}`
+  );
+  if (summary.length === 0) summary.push('Aucune base configurée : rien à comparer.');
+  await interaction.editReply(`Rapport envoyé dans le canal d'alertes.\n${summary.join('\n')}`);
+}
+
+async function handleSdr(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const agency = requireAgency(interaction);
+  if (!agency) return interaction.editReply('Ce canal n\'est lié à aucune agence : lance la commande dans le canal d\'une agence de la bonne société.');
+
+  const member = interaction.options.getUser('membre');
+  const nom = interaction.options.getString('nom') || '';
+  let displayName = member.globalName || member.username;
+  try {
+    const guildMember = await interaction.guild?.members.fetch(member.id);
+    if (guildMember?.displayName) displayName = guildMember.displayName;
+  } catch {
+    // pseudo global suffisant
+  }
+
+  const result = await rdvDb.linkSdr({ agency, guildId: interaction.guildId, discordUserId: member.id, displayName, nom });
+  if (!result.ok) return interaction.editReply(`❌ ${result.error}`);
+  const u = result.user || {};
+  await interaction.editReply(
+    `✅ Base ${result.label} : <@${member.id}> rattaché à **${[u.prenom, u.nom].filter(Boolean).join(' ') || nom || displayName}**`
+    + ` (${u.role || 'sdr'}${u.actif === false ? ', inactif' : ''})${result.created ? ' — compte créé' : ''}.`
+  );
 }
 
 // ── Alertes d'incident ──

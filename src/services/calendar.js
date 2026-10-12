@@ -64,6 +64,29 @@ async function getEventsInRange(calendarId, timeMin, timeMax) {
   return res.data.items || [];
 }
 
+/** Tous les événements d'une plage, pagination comprise (import d'historique). */
+async function listAllEvents(calendarId, timeMin, timeMax) {
+  const cal = await getCalendarApi();
+  const items = [];
+  let pageToken;
+  do {
+    const res = await withRetry(() =>
+      cal.events.list({
+        calendarId,
+        timeMin: timeMin.toISOString(),
+        timeMax: timeMax.toISOString(),
+        singleEvents: true,
+        orderBy: 'startTime',
+        maxResults: 2500,
+        pageToken,
+      })
+    );
+    items.push(...(res.data.items || []));
+    pageToken = res.data.nextPageToken;
+  } while (pageToken);
+  return items;
+}
+
 async function createEvent(calendarId, { summary, description, start, end, colorId }) {
   const cal = await getCalendarApi();
   const body = {
@@ -170,6 +193,7 @@ module.exports = {
   getCalendarApi,
   listCalendars,
   getEventsInRange,
+  listAllEvents,
   createEvent,
   updateEvent,
   deleteEvent,

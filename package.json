@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "test": "node --test",
     "deploy": "node src/deploy-commands.js",
-    "pm2": "pm2 start ecosystem.config.js"
+    "pm2": "pm2 start ecosystem.config.js",
+    "import:historique": "node scripts/import-history.js"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.96",
