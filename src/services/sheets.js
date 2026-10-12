@@ -67,12 +67,12 @@ async function appendRow(spreadsheetId, values, sheetName) {
   );
 }
 
-async function getAllRows(spreadsheetId, sheetName) {
+async function getAllRows(spreadsheetId, sheetName, lastCol = 'K') {
   const sheets = await getSheetsApi();
   const res = await withRetry(() =>
     sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: r(sheetName, 'A:K'),
+      range: r(sheetName, `A:${lastCol}`),
     })
   );
   return res.data.values || [];

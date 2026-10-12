@@ -17,6 +17,7 @@
 // ══════════════════════════════════════════════════════════════
 
 const { getDbForAgency, isDbWriteEnabled, inList } = require('./supabase');
+const { toDbOpeningHours } = require('./opening-hours');
 
 // ── Correspondances Sheets ↔ base ──────────────────────────────
 
@@ -81,6 +82,8 @@ function normalizePhoneE164(raw) {
   if (/^00[1-9][0-9]{6,14}$/.test(d)) return `+${d.slice(2)}`;
   if (/^0[1-9][0-9]{8}$/.test(d)) return `+33${d.slice(1)}`;
   if (/^33[1-9][0-9]{8}$/.test(d)) return `+${d}`;
+  // 9 chiffres : zéro initial perdu par un format numérique Sheets (612345678 → +33612345678)
+  if (/^[1-9][0-9]{8}$/.test(d)) return `+33${d}`;
   return null;
 }
 
@@ -548,12 +551,18 @@ function agencyToDbPatch(agency, guildId) {
     timezone: agency.timezone || 'Europe/Paris',
     dom_rdv_enabled: Boolean(agency.dom_rdv_enabled),
     paused: Boolean(agency.paused),
-    opening_hours: agency.opening_hours || null,
+    opening_hours: toDbOpeningHours(agency.opening_hours), // format base : jour ISO, [ouverture, fermeture]
   };
   const max = Number(agency.max_rdv_heure);
   if (Number.isFinite(max) && max > 0) patch.max_rdv_heure = Math.floor(max);
   if (guildId) patch.discord_guild_id = String(guildId);
   return patch;
+}
+
+async function findAgencyByName(db, name) {
+  if (!name) return null;
+  const rows = await db.select('agences', { select: 'id', nom: `ilike.${String(name).replace(/[%*]/g, '')}`, limit: 1 });
+  return rows?.[0]?.id || null;
 }
 
 /**
@@ -570,6 +579,12 @@ async function syncAgencyToDb(ctx) {
       : [];
     if (byChannel?.[0]?.id) id = byChannel[0].id;
     if (!id) id = await db.rpc('resoudre_agence', { brut: agency.name, src: 'bot' });
+    // Agence connue de la base sans alias bot (import d'historique, dashboard) : par nom, puis par onglet Sheets.
+    if (!id) id = await findAgencyByName(db, agency.name);
+    if (!id && agency.sheet_name) {
+      const bySheet = await db.select('agences', { select: 'id', sheet_onglet: `ilike.${agency.sheet_name}`, limit: 1 });
+      if (bySheet?.[0]?.id) id = bySheet[0].id;
+    }
     if (id) {
       await db.update('agences', { id: `eq.${id}` }, { ...patch, actif: true });
       return { rdvId: null, details: { agence_id: id, cree: false } };

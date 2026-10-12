@@ -9,18 +9,36 @@
 //
 // Options :
 //   --societe licall|kallkall   (obligatoire) base cible = société des agences
-//   --mode dry|sql|apply        dry = compte seulement ; sql = écrit des fichiers
+//   --mode dry|sql|stage|apply  dry = compte seulement ; sql = écrit des fichiers
 //                               SQL idempotents à rejouer (éditeur SQL Supabase,
-//                               MCP…) ; apply = écrit via l'API REST avec la clé
-//                               service_role (SUPABASE_<SOCIETE>_URL / _SERVICE_ROLE_KEY)
+//                               MCP…) ; stage = dépose les lignes dans la table
+//                               bot_import_staging via l'API REST (clé service_role)
+//                               et écrit merge_<lot>.sql, un SQL court qui fusionne le
+//                               lot dans les vraies tables ; apply = écrit tout via
+//                               l'API REST (SUPABASE_<SOCIETE>_URL / _SERVICE_ROLE_KEY)
 //   --agence <clé>              une seule agence (clé de agencies.json)
 //   --exclude <clé,clé>         agences à ignorer (ex: licall test)
+//   --sheets-only               n'importe que les RDV qui ont une ligne Sheets (les
+//                               événements Calendar sans ligne sont ignorés)
+//   --mode sql-stage            variante compacte du mode sql : fichiers NNN_stage.sql
+//                               (dépôt dans bot_import_staging, ~40 Ko chacun) puis
+//                               merge_<lot>.sql ; pratique quand on ne dispose que de
+//                               l'éditeur SQL
 //   --since AAAA-MM-JJ          début de l'historique Calendar (défaut 2025-01-01)
 //   --enrich-only               ne touche QUE les RDV déjà en base (colonnes du bot :
 //                               fin_at, type_rdv, confirmation, véhicule, liens,
 //                               commentaire, adresse, prospecteur brut) — pour Kall
 //                               Kall, dont l'historique vient déjà du dashboard.
 //   --out <dossier>             dossier des fichiers SQL (mode sql)
+//   --lot <id>                  identifiant de lot (défaut <societe>-<horodatage>)
+//   --sans-fiche                n'importe pas la fiche SDR (classeur RH « SDR <société> 26 »,
+//                               onglets ARCHIVE SDR + SDR : mail, rôle, dates, actif)
+//
+// Onglets du classeur RDV qui ne correspondent à aucune agence de agencies.json
+// (anciennes agences sans canal Discord) : importés aussi, agence créée inactive.
+// Colonne « Etat » (VENU / PAS VENU / ANNULÉ / VENDU / SAV, saisie par
+// l'équipe) prioritaire sur la colonne STATUT du bot ; colonne « TC » =
+// télé-confirmateur (confirme_par_user_id).
 //
 // Sources par RDV (clé = EVENT_ID Google Calendar) :
 //   - ligne Sheets : prospecteur, client, téléphone, date/heure, confirmation,
@@ -57,7 +75,7 @@ const PERSONNES_BATCH = 1000;
 // ── Arguments ──────────────────────────────────────────────────
 
 function parseArgs(argv) {
-  const args = { mode: 'dry', since: '2025-01-01', enrichOnly: false, out: null, agence: null, exclude: [], societe: null };
+  const args = { mode: 'dry', since: '2025-01-01', enrichOnly: false, sheetsOnly: false, out: null, agence: null, exclude: [], societe: null, lot: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -68,12 +86,15 @@ function parseArgs(argv) {
     else if (a === '--exclude') args.exclude = String(next() || '').split(',').map((k) => k.trim().toLowerCase()).filter(Boolean);
     else if (a === '--out') args.out = next();
     else if (a === '--enrich-only') args.enrichOnly = true;
+    else if (a === '--sheets-only') args.sheetsOnly = true;
+    else if (a === '--lot') args.lot = next();
+    else if (a === '--sans-fiche') args.sansFiche = true;
     else if (a === '--help' || a === '-h') { printHelp(); process.exit(0); }
     else throw new Error(`argument inconnu : ${a}`);
   }
   if (!args.societe || !COMPANIES[args.societe]) throw new Error('--societe licall|kallkall obligatoire');
-  if (!['dry', 'sql', 'apply'].includes(args.mode)) throw new Error('--mode dry|sql|apply');
-  if (args.mode === 'sql' && !args.out) args.out = path.join('supabase', 'imports', args.societe);
+  if (!['dry', 'sql', 'sql-stage', 'stage', 'apply'].includes(args.mode)) throw new Error('--mode dry|sql|sql-stage|stage|apply');
+  if (['sql', 'sql-stage', 'stage'].includes(args.mode) && !args.out) args.out = path.join('supabase', 'imports', args.societe);
   return args;
 }
 
@@ -118,7 +139,20 @@ function parseUpdatedAt(value) {
 
 function looksLikeHeader(row) {
   const cells = (row || []).map((c) => String(c || '').toUpperCase());
-  return cells.some((c) => c.includes('PROSPECTEUR') || c.includes('CLIENT') || c.includes('EVENT'));
+  return cells.some((c) => c.includes('PROSPECTEUR') || c.includes('EVENT'));
+}
+
+/**
+ * Colonnes au-delà de K, repérées par leur en-tête (ligne 3 des onglets) :
+ *   « Etat » = résultat réel saisi par l'équipe (VENU / PAS VENU / ANNULÉ /
+ *   VENDU / SAV), prioritaire sur la colonne STATUT du bot (PLANIFIÉ…) ;
+ *   « TC »   = télé-confirmateur (nom), colonne K ou M selon l'onglet.
+ */
+function detectExtraColumns(row) {
+  const cells = (row || []).map((c) => rdvDb.stripEmoji(String(c || '')).trim().toUpperCase());
+  const etat = cells.findIndex((c) => c === 'ETAT' || c === 'ÉTAT');
+  const tc = cells.findIndex((c) => c === 'TC');
+  return { etat, tc };
 }
 
 function parseSheetRows(rows) {
@@ -126,6 +160,7 @@ function parseSheetRows(rows) {
   let rejected = 0;
   let headerIdx = -1;
   for (let i = 0; i < Math.min(rows.length, 10); i++) if (looksLikeHeader(rows[i])) headerIdx = i;
+  const extra = detectExtraColumns(rows[headerIdx]);
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i] || [];
     if (row.every((c) => !String(c || '').trim())) continue;
@@ -142,9 +177,87 @@ function parseSheetRows(rows) {
       statut: String(row[COL.STATUT] || '').trim(),
       updatedAt: String(row[COL.UPDATED_AT] || '').trim(),
       confPar: String(row[COL.CONF_PAR] || '').trim(),
+      etat: extra.etat >= 0 ? String(row[extra.etat] || '').trim() : '',
+      tc: extra.tc >= 0 ? String(row[extra.tc] || '').trim() : '',
     });
   }
-  return { records: out, rejected };
+  return { records: out, rejected, columns: extra };
+}
+
+// ── Fiche SDR (classeur RH « SDR <société> 26 ») ───────────────
+
+const ROSTERS = {
+  licall: { spreadsheetId: '1TDii7089ebh0XG9xcy8FyC43cfGfqpXzIeJRrIwytbU', tabs: ['ARCHIVE SDR', 'SDR'] },
+  kallkall: { spreadsheetId: '14Ab0jU1JL2IXCn-7covj24G2DPpjpVAQ-dGIDOjihuo', tabs: ['ARCHIVE SDR', 'SDR'] },
+};
+
+function parseSheetDate(value) {
+  const m = String(value || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (!m) return null;
+  let y = Number(m[3]);
+  if (y < 100) y += 2000;
+  const d = new Date(Date.UTC(y, Number(m[2]) - 1, Number(m[1])));
+  return Number.isNaN(d.getTime()) || y < 2015 ? null : d.toISOString().slice(0, 10);
+}
+
+function rosterRole(raw) {
+  const r = rdvDb.stripEmoji(String(raw || '')).trim().toUpperCase();
+  if (!r) return null;
+  if (r === 'TL' || r.startsWith('TEAM LEAD')) return 'tl';
+  if (r === 'RH') return 'rh';
+  if (r === 'SDR') return 'sdr';
+  if (r === 'TC' || r.startsWith('STAG') || r.startsWith('ST ') || r.startsWith('DATA') || r.startsWith('FORMAT') || r === 'ADMIN' || r === 'COACH') return 'support';
+  return null;
+}
+
+/** Onglet fiche SDR → lignes { nom, prenom, email, role, actif, date_entree, date_sortie }. */
+function parseRosterRows(rows, rang) {
+  const h = rows.findIndex((x) => (x || []).some((c) => /^NOM$/i.test(String(c).trim())) && (x || []).some((c) => /PR[ÉE]NOM/i.test(String(c))));
+  if (h < 0) return [];
+  const hdr = rows[h].map((c) => rdvDb.stripEmoji(String(c || '')).trim().toUpperCase());
+  const idx = (re) => hdr.findIndex((c) => re.test(c));
+  const col = {
+    nom: idx(/^NOM$/), prenom: idx(/^PR[ÉE]NOM$/), mail: idx(/MAIL/), etat: idx(/^[ÉE]TAT$|^ACTIF$/),
+    role: idx(/^STATUT$|^R[ÔO]LE$|^ROLE$/), deb: idx(/DATE 1ER APPEL|DATE D[ÉE]BUT|D[ÉE]MARRAGE/), stop: idx(/DATE STOP|DATE FIN/),
+  };
+  const out = [];
+  for (const row of rows.slice(h + 1)) {
+    const nom = String(row[col.nom] || '').trim();
+    let prenom = String(row[col.prenom] || '').trim();
+    if (!nom || !prenom) continue;
+    if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(prenom)) prenom = ''; // cellule décalée (date à la place du prénom)
+    const etatRaw = col.etat >= 0 ? String(row[col.etat] || '').trim() : '';
+    const etatUp = rdvDb.stripEmoji(etatRaw).trim().toUpperCase();
+    // Onglet ARCHIVE Licall : la colonne ÉTAT contient en fait le rôle.
+    const roleFromEtat = rosterRole(etatRaw);
+    const role = (col.role >= 0 && rosterRole(row[col.role])) || roleFromEtat || 'sdr';
+    let actif = false;
+    if (etatRaw.startsWith('✅') || etatRaw.startsWith('⚠️') || /^EN PROD/.test(etatUp) || etatUp === 'TRUE') actif = true;
+    const email = String(col.mail >= 0 ? row[col.mail] || '' : '').trim().toLowerCase();
+    out.push({
+      nom, prenom, email: email.includes('@') ? email : null, role, actif, rang,
+      date_entree: col.deb >= 0 ? parseSheetDate(row[col.deb]) : null,
+      date_sortie: col.stop >= 0 ? parseSheetDate(row[col.stop]) : null,
+    });
+  }
+  return out;
+}
+
+async function loadRoster(societe, log) {
+  const cfg = ROSTERS[societe];
+  if (!cfg) return [];
+  const fiches = [];
+  for (let i = 0; i < cfg.tabs.length; i++) {
+    try {
+      const rows = await sheets.getAllRows(cfg.spreadsheetId, cfg.tabs[i], 'AZ');
+      const parsed = parseRosterRows(rows, i);
+      fiches.push(...parsed);
+      log(`→ fiche SDR « ${cfg.tabs[i]} » : ${parsed.length} ligne(s)`);
+    } catch (err) {
+      log(`   fiche SDR « ${cfg.tabs[i]} » inaccessible : ${err.message}`);
+    }
+  }
+  return fiches;
 }
 
 function prefixToStatut(prefix) {
@@ -183,7 +296,8 @@ function buildRecord(eventId, agency, sheetRow, event) {
   if (!end) end = new Date(new Date(start).getTime() + 60 * 60000).toISOString();
 
   const createdAt = sheetRow ? parseUpdatedAt(sheetRow.updatedAt) : null;
-  const statut = (sheetRow && rdvDb.sheetStatutToDb(sheetRow.statut)) || prefixToStatut(prefix) || 'pris';
+  // Résultat réel (colonne « Etat ») avant le statut du bot (colonne STATUT), avant le titre Calendar.
+  const statut = (sheetRow && (rdvDb.sheetStatutToDb(sheetRow.etat) || rdvDb.sheetStatutToDb(sheetRow.statut))) || prefixToStatut(prefix) || 'pris';
   const confirmation = (sheetRow && rdvDb.sheetConfToDb(sheetRow.confirmation)) || prefixToConf(prefix) || null;
 
   const vehicule = details
@@ -197,12 +311,12 @@ function buildRecord(eventId, agency, sheetRow, event) {
   return {
     eventId,
     agencyKey: agency.key,
-    channelId: agency.channel_id,
+    channelId: agency.channel_id || null,
     agencyName: agency.name,
     prospecteur: rdvDb.stripEmoji(sheetRow?.prospecteur || '') || null,
-    confPar: rdvDb.stripEmoji(sheetRow?.confPar || '') || null,
+    confPar: rdvDb.stripEmoji(sheetRow?.tc || sheetRow?.confPar || '') || null,
     clientNom: String(sheetRow?.client || details?.nomClient || '').trim().toUpperCase() || null,
-    telephone: rdvDb.normalizePhoneE164(sheetRow?.telephone || details?.telephone || ''),
+    telephone: rdvDb.normalizePhoneE164(sheetRow?.telephone || '') || rdvDb.normalizePhoneE164(details?.telephone || ''),
     start,
     end,
     typeRdv: isDom ? 'mandat_dom' : 'mandat',
@@ -219,14 +333,48 @@ function buildRecord(eventId, agency, sheetRow, event) {
   };
 }
 
+const normKey = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const SKIP_TABS = /^(TOTAL|STATS?\b|STAT\b|KPI)/i;
+
+/**
+ * Agences à importer = agences de agencies.json de la société + onglets du
+ * classeur RDV qui ne correspondent à aucune d'elles (anciennes agences sans
+ * canal Discord : créées en base inactives, sans Calendar). Un onglet dont le
+ * nom diffère légèrement du sheet_name (« SANTENY JVVA » / « SANTENY ») est
+ * rapproché par nom normalisé.
+ */
+async function listAgenciesForImport(args, company, log) {
+  const all = loadAgencies();
+  const fromJson = Object.entries(all)
+    .map(([key, cfg]) => ({ key, ...cfg, readTab: cfg.sheet_name }))
+    .filter((a) => resolveCompany(a, a.guild_id || null) === args.societe);
+  const spreadsheetIds = [...new Set(fromJson.map((a) => a.spreadsheet_id).filter(Boolean))];
+  const companySheet = process.env[company.spreadsheetVar] || company.spreadsheetDefault;
+  if (companySheet && !spreadsheetIds.includes(companySheet)) spreadsheetIds.push(companySheet);
+  const extra = [];
+  for (const spreadsheetId of spreadsheetIds) {
+    let tabs = [];
+    try { tabs = await sheets.listSheetTabs(spreadsheetId); } catch (err) { log(`   onglets illisibles (${spreadsheetId.slice(0, 6)}…) : ${err.message}`); }
+    for (const tab of tabs) {
+      if (SKIP_TABS.test(tab)) continue;
+      const exact = fromJson.find((a) => a.spreadsheet_id === spreadsheetId && a.sheet_name === tab);
+      if (exact) continue;
+      const near = fromJson.find((a) => a.spreadsheet_id === spreadsheetId && (normKey(a.sheet_name) === normKey(tab) || normKey(a.name) === normKey(tab)));
+      if (near) { near.readTab = tab; continue; }
+      extra.push({ key: `onglet:${tab.toLowerCase()}`, name: tab, sheet_name: tab, readTab: tab, spreadsheet_id: spreadsheetId, channel_id: null, calendar_id: null, legacy: true });
+    }
+  }
+  const matches = (a, k) => a.key === k || normKey(a.name) === normKey(k) || normKey(a.sheet_name) === normKey(k);
+  return [...fromJson, ...extra]
+    .filter((a) => !args.agence || matches(a, args.agence))
+    .filter((a) => !args.exclude.some((k) => matches(a, k)));
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function buildPlan(args, log) {
   const company = COMPANIES[args.societe];
-  const all = loadAgencies();
-  const agencies = Object.entries(all)
-    .map(([key, cfg]) => ({ key, ...cfg }))
-    .filter((a) => resolveCompany(a, a.guild_id || null) === args.societe)
-    .filter((a) => !args.agence || a.key === args.agence)
-    .filter((a) => !args.exclude.includes(a.key));
+  const agencies = await listAgenciesForImport(args, company, log);
   if (agencies.length === 0) throw new Error(`aucune agence ${company.label} dans agencies.json${args.agence ? ` (clé ${args.agence})` : ''}`);
 
   const since = new Date(`${args.since}T00:00:00Z`);
@@ -234,30 +382,35 @@ async function buildPlan(args, log) {
   const until = new Date(Date.now() + 400 * 24 * 3600 * 1000);
 
   const records = new Map();
-  const stats = { agences: agencies.length, lignesSheets: 0, rejetsSansEventId: 0, evenementsCalendar: 0, sansDate: 0, parAgence: {} };
+  const stats = { agences: agencies.length, agencesSansCanal: agencies.filter((a) => a.legacy).length, lignesSheets: 0, rejetsSansEventId: 0, evenementsCalendar: 0, sansDate: 0, parAgence: {} };
 
   for (const agency of agencies) {
-    log(`→ ${agency.name}`);
+    log(`→ ${agency.name}${agency.legacy ? ' (onglet sans canal)' : ''}`);
     let sheetRecords = new Map();
     let rejected = 0;
     try {
-      const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
-      ({ records: sheetRecords, rejected } = parseSheetRows(rows));
+      const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.readTab || agency.sheet_name, 'Z');
+      const parsed = parseSheetRows(rows);
+      ({ records: sheetRecords, rejected } = parsed);
+      if (parsed.columns.etat < 0 && sheetRecords.size) log('   (pas de colonne « Etat » : statut = colonne du bot)');
     } catch (err) {
       log(`   Sheets inaccessible : ${err.message}`);
     }
+    await sleep(1100); // quota Sheets : 60 lectures/minute
     let events = [];
-    try {
-      events = await calendar.listAllEvents(agency.calendar_id, since, until);
-    } catch (err) {
-      log(`   Calendar inaccessible : ${err.message}`);
+    if (agency.calendar_id && (!args.sheetsOnly || sheetRecords.size)) {
+      try {
+        events = await calendar.listAllEvents(agency.calendar_id, since, until);
+      } catch (err) {
+        log(`   Calendar inaccessible : ${err.message}`);
+      }
     }
     const eventsById = new Map();
     for (const ev of events) {
       if (!ev?.id) continue;
       if (sheetRecords.has(ev.id) || isManagedRdvTitle(ev.summary || '')) eventsById.set(ev.id, ev);
     }
-    const ids = new Set([...sheetRecords.keys(), ...eventsById.keys()]);
+    const ids = new Set(args.sheetsOnly ? [...sheetRecords.keys()] : [...sheetRecords.keys(), ...eventsById.keys()]);
     let added = 0;
     for (const id of ids) {
       const rec = buildRecord(id, agency, sheetRecords.get(id) || null, eventsById.get(id) || null);
@@ -292,16 +445,21 @@ async function buildPlan(args, log) {
     if (!personnes.has(r.telephone) || (!personnes.get(r.telephone) && r.clientNom)) personnes.set(r.telephone, r.clientNom);
   }
 
+  const fiches = args.sansFiche || args.enrichOnly ? [] : await loadRoster(args.societe, log);
+
   stats.rdv = records.size;
   stats.sdr = sdrs.size;
   stats.sdrActifs = [...sdrs.values()].filter((s) => s.actif).length;
+  stats.fichesSdr = fiches.length;
+  stats.fichesSdrActives = fiches.filter((f) => f.actif).length;
   stats.personnes = personnes.size;
   stats.sansTelephone = [...records.values()].filter((r) => !r.telephone).length;
   stats.sansProspecteur = [...records.values()].filter((r) => !r.prospecteur).length;
+  stats.sansCanal = [...records.values()].filter((r) => !r.channelId).length;
   stats.statuts = {};
   for (const r of records.values()) stats.statuts[r.statut] = (stats.statuts[r.statut] || 0) + 1;
 
-  return { company, agencies, records: [...records.values()], sdrs: [...sdrs.values()], personnes: [...personnes.entries()], stats };
+  return { company, agencies, records: [...records.values()], sdrs: [...sdrs.values()], personnes: [...personnes.entries()], fiches, stats };
 }
 
 // ── Émission SQL idempotente ───────────────────────────────────
@@ -487,6 +645,254 @@ async function applyViaRest(plan, args, log) {
   log(`RDV écrits : ${done}, événements de statut insérés : ${events}`);
 }
 
+// ── Dépôt dans bot_import_staging + SQL de fusion ──────────────
+
+function stagingRows(plan, lot, enrichOnly) {
+  const rows = [];
+  if (!enrichOnly) {
+    for (const f of plan.fiches || []) rows.push({ lot, kind: 'fiche', payload: f });
+    for (const s of plan.sdrs) rows.push({ lot, kind: 'sdr', payload: { alias: s.alias, prenom: s.prenom || '', nom: s.nom || s.alias, actif: s.actif } });
+    for (const [tel, nom] of plan.personnes) rows.push({ lot, kind: 'personne', payload: { tel, nom } });
+  }
+  for (const r of plan.records) {
+    rows.push({ lot, kind: 'rdv', payload: {
+      event_id: r.eventId, channel_id: r.channelId, agence: r.agencyName, sdr: r.prospecteur, tel: r.telephone, conf_par: r.confPar,
+      debut_at: r.start, fin_at: r.end, type_rdv: r.typeRdv, confirmation: r.confirmation, liens: r.liens,
+      commentaire: r.commentaire, adresse: r.adresse, vehicule: r.vehicule, statut: r.statut, pris_at: r.prisAt, result_at: r.resultAt,
+    } });
+  }
+  return rows;
+}
+
+/** SQL de fusion d'un lot déposé dans bot_import_staging (idempotent, à rejouer sur la bonne base). */
+function sqlMerge(lot, enrichOnly, journalDetails) {
+  const L = q(lot);
+  const parts = [`-- Fusion du lot ${lot} depuis bot_import_staging (${enrichOnly ? 'enrich-only' : 'complet'}). Idempotent.`];
+  if (!enrichOnly) {
+    // Agences des onglets sans canal Discord : créées inactives (nom = onglet).
+    parts.push(`insert into agences (nom, actif, sheet_onglet)
+select distinct payload->>'agence', false, payload->>'agence'
+from bot_import_staging s where lot = ${L} and kind = 'rdv' and nullif(payload->>'agence', '') is not null
+  and not exists (select 1 from agences a where a.discord_channel_id = s.payload->>'channel_id'
+                                             or normalise_libelle(a.nom) = normalise_libelle(s.payload->>'agence')
+                                             or normalise_libelle(a.sheet_onglet) = normalise_libelle(s.payload->>'agence'));`);
+    // Fiche SDR (classeur RH) : rapprochée par nom complet (les deux ordres) ou mail ;
+    // ARCHIVE (rang 0) puis SDR (rang 1) : l'onglet courant a le dernier mot.
+    parts.push(`do $$
+declare f record; v_id uuid; v_mail text;
+begin
+  for f in select payload->>'nom' as nom, payload->>'prenom' as prenom, lower(payload->>'email') as email,
+                  coalesce(payload->>'role', 'sdr') as role, coalesce((payload->>'actif')::boolean, false) as actif,
+                  (payload->>'date_entree')::date as date_entree, (payload->>'date_sortie')::date as date_sortie
+           from bot_import_staging where lot = ${L} and kind = 'fiche'
+           order by (payload->>'rang')::int, id loop
+    select id into v_id from users where normalise_libelle(prenom || ' ' || nom) = normalise_libelle(f.prenom || ' ' || f.nom) limit 1;
+    if v_id is null then
+      select user_id into v_id from users_alias
+       where alias_norm in (normalise_libelle(f.prenom || ' ' || f.nom), normalise_libelle(f.nom || ' ' || f.prenom)) limit 1;
+    end if;
+    if v_id is null and f.email is not null then
+      select id into v_id from users where lower(email) = f.email limit 1;
+    end if;
+    v_mail := case when f.email is not null and not exists (select 1 from users u where lower(u.email) = f.email and u.id is distinct from v_id) then f.email end;
+    if v_id is null then
+      insert into users (nom, prenom, email, role, actif, date_entree, date_sortie)
+      values (f.nom, f.prenom, v_mail, f.role, f.actif, f.date_entree, f.date_sortie) returning id into v_id;
+    else
+      update users set
+        email = coalesce(users.email, v_mail),
+        role = case when users.role = 'sdr' then f.role else users.role end,
+        actif = f.actif,
+        date_entree = coalesce(users.date_entree, f.date_entree),
+        date_sortie = coalesce(f.date_sortie, users.date_sortie)
+      where id = v_id;
+    end if;
+  end loop;
+end $$;`);
+    parts.push(`do $$
+declare c record; v_id uuid;
+begin
+  for c in select distinct payload->>'alias' as alias, payload->>'prenom' as prenom, payload->>'nom' as nom, coalesce((payload->>'actif')::boolean, false) as actif
+           from bot_import_staging where lot = ${L} and kind = 'sdr' loop
+    select user_id into v_id from users_alias where alias_norm = normalise_libelle(c.alias) limit 1;
+    if v_id is null then
+      select user_id into v_id from users_alias where alias_norm = normalise_libelle(c.prenom || ' ' || c.nom) limit 1;
+    end if;
+    if v_id is null then
+      -- fiche SDR importée juste avant : même personne, « Prénom NOM » ou « NOM Prénom »
+      select id into v_id from users
+       where normalise_libelle(prenom || ' ' || nom) in (normalise_libelle(c.alias), normalise_libelle(c.nom || ' ' || c.prenom))
+          or normalise_libelle(nom || ' ' || prenom) = normalise_libelle(c.alias)
+       order by actif desc limit 1;
+    end if;
+    if v_id is null then
+      insert into users (nom, prenom, role, actif) values (c.nom, c.prenom, 'sdr', c.actif) returning id into v_id;
+    end if;
+    insert into users_alias (user_id, alias, alias_norm, source) values (v_id, c.alias, normalise_libelle(c.alias), 'bot')
+    on conflict (alias_norm, source) do nothing;
+  end loop;
+end $$;`);
+    parts.push(`insert into personnes (telephone_e164, nom)
+select distinct on (payload->>'tel') payload->>'tel', nullif(payload->>'nom', '')
+from bot_import_staging where lot = ${L} and kind = 'personne' and payload->>'tel' is not null
+order by payload->>'tel', (payload->>'nom') is null
+on conflict (telephone_e164) do update set nom = coalesce(personnes.nom, excluded.nom);`);
+  }
+  // fin_at absent = début + 60 min ; pris_at absent = début ; result_at = greatest(début, pris) + 1 s.
+  const v = `(select payload->>'event_id' as event_id, payload->>'channel_id' as channel_id, nullif(payload->>'agence', '') as agence, nullif(payload->>'sdr', '') as sdr, payload->>'tel' as tel,
+      nullif(payload->>'conf_par', '') as conf_par, (payload->>'debut_at')::timestamptz as debut_at,
+      coalesce((payload->>'fin_at')::timestamptz, (payload->>'debut_at')::timestamptz + interval '60 minutes') as fin_at, payload->>'type_rdv' as type_rdv,
+      payload->>'confirmation' as confirmation, payload->>'liens' as liens, payload->>'commentaire' as commentaire, payload->>'adresse' as adresse,
+      case when payload->'vehicule' is null or payload->'vehicule' = 'null'::jsonb then null else payload->'vehicule' end as vehicule,
+      coalesce(payload->>'statut', 'pris') as statut,
+      coalesce((payload->>'pris_at')::timestamptz, (payload->>'debut_at')::timestamptz) as pris_at,
+      greatest((payload->>'debut_at')::timestamptz, coalesce((payload->>'pris_at')::timestamptz, (payload->>'debut_at')::timestamptz)) + interval '1 second' as result_at
+    from (select distinct on (payload->>'event_id') payload from bot_import_staging where lot = ${L} and kind = 'rdv' order by payload->>'event_id', id desc) s)`;
+  if (enrichOnly) {
+    parts.push(`update rdv set
+  fin_at = coalesce(rdv.fin_at, v.fin_at),
+  type_rdv = v.type_rdv,
+  confirmation = coalesce(rdv.confirmation, v.confirmation),
+  liens = coalesce(rdv.liens, v.liens),
+  commentaire = coalesce(rdv.commentaire, v.commentaire),
+  adresse_dom = coalesce(rdv.adresse_dom, v.adresse),
+  vehicule = coalesce(rdv.vehicule, v.vehicule),
+  prospecteur_nom_brut = coalesce(rdv.prospecteur_nom_brut, v.sdr)
+from ${v} as v
+where rdv.gcal_event_id = v.event_id;`);
+  } else {
+    parts.push(`insert into rdv (gcal_event_id, agence_id, sdr_user_id, personne_id, confirme_par_user_id, debut_at, fin_at, type_rdv, confirmation, liens, commentaire, adresse_dom, vehicule, prospecteur_nom_brut, source)
+select v.event_id,
+  coalesce((select id from agences where v.channel_id is not null and discord_channel_id = v.channel_id limit 1),
+           (select id from agences where v.agence is not null and normalise_libelle(sheet_onglet) = normalise_libelle(v.agence) limit 1),
+           (select id from agences where v.agence is not null and normalise_libelle(nom) = normalise_libelle(v.agence) limit 1)),
+  (select user_id from users_alias where v.sdr is not null and alias_norm = normalise_libelle(v.sdr) limit 1),
+  (select id from personnes where v.tel is not null and telephone_e164 = v.tel limit 1),
+  (select user_id from users_alias where v.conf_par is not null and alias_norm = normalise_libelle(v.conf_par) limit 1),
+  v.debut_at, v.fin_at, v.type_rdv, v.confirmation, v.liens, v.commentaire, v.adresse, v.vehicule, v.sdr, 'bot'
+from ${v} as v
+on conflict (gcal_event_id) do update set
+  agence_id = coalesce(excluded.agence_id, rdv.agence_id),
+  sdr_user_id = coalesce(excluded.sdr_user_id, rdv.sdr_user_id),
+  personne_id = coalesce(excluded.personne_id, rdv.personne_id),
+  confirme_par_user_id = coalesce(excluded.confirme_par_user_id, rdv.confirme_par_user_id),
+  debut_at = coalesce(excluded.debut_at, rdv.debut_at),
+  fin_at = coalesce(excluded.fin_at, rdv.fin_at),
+  type_rdv = excluded.type_rdv,
+  confirmation = coalesce(excluded.confirmation, rdv.confirmation),
+  liens = coalesce(excluded.liens, rdv.liens),
+  commentaire = coalesce(excluded.commentaire, rdv.commentaire),
+  adresse_dom = coalesce(excluded.adresse_dom, rdv.adresse_dom),
+  vehicule = coalesce(excluded.vehicule, rdv.vehicule),
+  prospecteur_nom_brut = coalesce(excluded.prospecteur_nom_brut, rdv.prospecteur_nom_brut);`);
+    parts.push(`insert into rdv_evenements (rdv_id, statut, origine, at)
+select r.id, e.statut, 'bot', e.at
+from ${v} as v
+join rdv r on r.gcal_event_id = v.event_id
+cross join lateral (values ('pris', v.pris_at), (v.statut, v.result_at)) as e(statut, at)
+where e.statut is not null and e.statut <> '' and e.at is not null
+  and not (e.statut = 'pris' and e.at = v.result_at)
+  and not exists (select 1 from rdv_evenements x where x.rdv_id = r.id and x.statut = e.statut);`);
+  }
+  parts.push(`insert into bot_journal (action, db_ok, details) values ('import_historique', true, ${q(JSON.stringify(journalDetails))}::jsonb);`);
+  parts.push(`delete from bot_import_staging where lot = ${L};`);
+  return parts.join('\n\n');
+}
+
+/** ISO sans millisecondes (plus court, même instant). */
+function shortIso(iso) {
+  return iso ? String(iso).replace(/\.\d{3}Z$/, 'Z') : null;
+}
+
+/**
+ * Mode sql-stage : dépôt compact dans bot_import_staging par fichiers SQL
+ * (tableaux positionnels jsonb → objets reconstruits côté SQL), puis fusion.
+ */
+function emitStageSql(plan, args, log) {
+  const lot = args.lot || `${args.societe}-${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`;
+  // Index d'agence = couple (canal Discord ou null, nom d'onglet) reconstruit par CASE côté SQL.
+  const agences = [...new Map(plan.records.map((r) => [`${r.channelId || ''}|${r.agencyName}`, { channelId: r.channelId, name: r.agencyName }])).values()];
+  const chanIdx = new Map(agences.map((a, i) => [`${a.channelId || ''}|${a.name}`, i]));
+  const files = [];
+  fs.mkdirSync(args.out, { recursive: true });
+  let n = 0;
+  const write = (name, content) => {
+    const file = path.join(args.out, `${String(++n).padStart(3, '0')}_${name}.sql`);
+    fs.writeFileSync(file, `${content}\n`);
+    files.push(file);
+  };
+  const L = q(lot);
+  const stageInsert = (kind, expr, jsonArray) =>
+    `insert into bot_import_staging (lot, kind, payload)\nselect ${L}, '${kind}', ${expr}\nfrom jsonb_array_elements(${q(jsonArray)}::jsonb) as a;`;
+
+  if (!args.enrichOnly) {
+    for (const batch of chunk(plan.fiches || [], 150)) {
+      const fiches = batch.map((f) => [f.nom, f.prenom, f.email, f.role, f.actif ? 1 : 0, f.date_entree, f.date_sortie, f.rang]);
+      write('stage_fiche', stageInsert('fiche', "jsonb_build_object('nom', a->>0, 'prenom', a->>1, 'email', a->>2, 'role', a->>3, 'actif', (a->>4) = '1', 'date_entree', a->>5, 'date_sortie', a->>6, 'rang', (a->>7)::int)", JSON.stringify(fiches)));
+    }
+    const sdrs = plan.sdrs.map((s) => [s.alias, s.prenom || '', s.nom || s.alias, s.actif ? 1 : 0]);
+    write('stage_sdr', stageInsert('sdr', "jsonb_build_object('alias', a->>0, 'prenom', a->>1, 'nom', a->>2, 'actif', (a->>3) = '1')", JSON.stringify(sdrs)));
+    for (const batch of chunk(plan.personnes, 1200)) {
+      write('stage_personnes', stageInsert('personne', "jsonb_build_object('tel', a->>0, 'nom', a->>1)", JSON.stringify(batch)));
+    }
+  }
+  // Compact : fin_at omis quand = début + 60 min, pris_at omis quand = début,
+  // result_at toujours dérivé (greatest(début, pris) + 1 s) par merge_<lot>.sql.
+  const rdvRows = plan.records.map((r) => {
+    const startMs = new Date(r.start).getTime();
+    const endDefault = new Date(r.end).getTime() === startMs + 60 * 60000;
+    const prisDefault = new Date(r.prisAt).getTime() === startMs;
+    return [
+      r.eventId, chanIdx.get(`${r.channelId || ''}|${r.agencyName}`), r.prospecteur, r.telephone, r.confPar, shortIso(r.start), endDefault ? null : shortIso(r.end),
+      r.typeRdv === 'mandat_dom' ? 1 : 0, r.confirmation, r.liens, r.commentaire, r.adresse,
+      r.vehicule ? [r.vehicule.marque, r.vehicule.modele, r.vehicule.annee, r.vehicule.km, r.vehicule.prix] : null,
+      r.statut === 'pris' ? null : r.statut, prisDefault ? null : shortIso(r.prisAt),
+    ];
+  });
+  const chanCase = `case a->>1 ${agences.map((c, i) => `when '${i}' then ${q(c.channelId)}`).join(' ')} end`;
+  const agenceCase = `case a->>1 ${agences.map((c, i) => `when '${i}' then ${q(c.name)}`).join(' ')} end`;
+  const rdvExpr = `jsonb_build_object(
+    'event_id', a->>0, 'channel_id', ${chanCase}, 'agence', ${agenceCase}, 'sdr', a->>2, 'tel', a->>3, 'conf_par', a->>4,
+    'debut_at', a->>5, 'fin_at', a->>6, 'type_rdv', case when a->>7 = '1' then 'mandat_dom' else 'mandat' end,
+    'confirmation', a->>8, 'liens', a->>9, 'commentaire', a->>10, 'adresse', a->>11,
+    'vehicule', case when a->12 is null or a->12 = 'null'::jsonb then null else jsonb_build_object('marque', a->12->>0, 'modele', a->12->>1, 'annee', (a->12->>2)::int, 'km', (a->12->>3)::int, 'prix', (a->12->>4)::int) end,
+    'statut', coalesce(a->>13, 'pris'), 'pris_at', a->>14)`;
+  for (const batch of chunk(rdvRows, args.rowsPerFile || 45)) {
+    write('stage_rdv', stageInsert('rdv', rdvExpr, JSON.stringify(batch)));
+  }
+  const { parAgence, ...details } = plan.stats;
+  const mergeFile = path.join(args.out, `merge_${lot}.sql`);
+  fs.writeFileSync(mergeFile, `${sqlMerge(lot, args.enrichOnly, { ...details, societe: args.societe, lot, enrich_only: args.enrichOnly, sheets_only: args.sheetsOnly, since: args.since })}\n`);
+  log(`Lot ${lot} : ${files.length} fichier(s) de dépôt + ${mergeFile}, à rejouer dans l'ordre sur la base ${plan.company.label} UNIQUEMENT.`);
+  return { lot, files, mergeFile };
+}
+
+async function stageViaRest(plan, args, log) {
+  const company = COMPANIES[args.societe];
+  const url = String(process.env[company.urlVar] || '').trim().replace(/\/+$/, '');
+  const key = String(process.env[company.keyVar] || '').trim();
+  if (!url || !key) throw new Error(`${company.urlVar} et ${company.keyVar} requis`);
+  const lot = `${args.societe}-${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`;
+  const rows = stagingRows(plan, lot, args.enrichOnly);
+  let sent = 0;
+  for (const batch of chunk(rows, 500)) {
+    const res = await fetch(`${url}/rest/v1/bot_import_staging`, {
+      method: 'POST',
+      headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+      body: JSON.stringify(batch),
+    });
+    if (!res.ok) throw new Error(`dépôt refusé (${res.status}) : ${(await res.text()).slice(0, 300)}`);
+    sent += batch.length;
+    if (sent % 2000 === 0 || sent === rows.length) log(`   déposé ${sent}/${rows.length}`);
+  }
+  const { parAgence, ...details } = plan.stats;
+  fs.mkdirSync(args.out, { recursive: true });
+  const file = path.join(args.out, `merge_${lot}.sql`);
+  fs.writeFileSync(file, `${sqlMerge(lot, args.enrichOnly, { ...details, societe: args.societe, lot, enrich_only: args.enrichOnly, since: args.since })}\n`);
+  log(`Lot ${lot} déposé (${rows.length} lignes). Fusion : rejouer ${file} sur la base ${company.label} UNIQUEMENT.`);
+  return { lot, file, rows: rows.length };
+}
+
 // ── Point d'entrée ─────────────────────────────────────────────
 
 async function main() {
@@ -497,6 +903,8 @@ async function main() {
   const { parAgence, ...summary } = plan.stats;
   log(JSON.stringify(summary, null, 2));
   if (args.mode === 'sql') emitSql(plan, args, log);
+  if (args.mode === 'sql-stage') emitStageSql(plan, args, log);
+  if (args.mode === 'stage') await stageViaRest(plan, args, log);
   if (args.mode === 'apply') await applyViaRest(plan, args, log);
 }
 
@@ -507,4 +915,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, parisToIso, parseSheetDateTime, parseUpdatedAt, parseSheetRows, buildRecord, prefixToStatut, prefixToConf, sqlUsers, sqlPersonnes, sqlRdv, sqlEvents };
+module.exports = { parseArgs, parisToIso, parseSheetDateTime, parseUpdatedAt, parseSheetDate, parseSheetRows, parseRosterRows, rosterRole, detectExtraColumns, buildRecord, buildPlan, prefixToStatut, prefixToConf, sqlUsers, sqlPersonnes, sqlRdv, sqlEvents, stagingRows, sqlMerge, emitStageSql };

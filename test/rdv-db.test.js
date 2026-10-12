@@ -332,7 +332,7 @@ test('échec base : journal db_ok=false + avis « Base non écrite », jamais d\
 
 test('syncAgencyToDb : agence trouvée par canal → mise à jour, sinon création + alias', async () => {
   process.env.DB_WRITE_ENABLED = 'true';
-  const agency = { key: 'albi', name: 'ALBI', spreadsheet_id: LICALL_SHEET, channel_id: 'c1', calendar_id: 'cal@x', sheet_name: 'ALBI', max_rdv_heure: 2, paused: true, opening_hours: { 1: 'fermé' } };
+  const agency = { key: 'albi', name: 'ALBI', spreadsheet_id: LICALL_SHEET, channel_id: 'c1', calendar_id: 'cal@x', sheet_name: 'ALBI', max_rdv_heure: 2, paused: true, opening_hours: { 0: 'fermé', 1: '9:00-19:30', 6: 'fermé' } };
 
   const found = fakeDb();
   let restore = stubRouting(found);
@@ -347,6 +347,20 @@ test('syncAgencyToDb : agence trouvée par canal → mise à jour, sinon créati
     assert.equal(upd[3].gcal_calendar_id, 'cal@x');
     assert.equal(upd[3].actif, true);
     assert.equal(upd[3].nom, undefined, 'ne renomme jamais');
+    assert.deepEqual(upd[3].opening_hours, { 1: ['09:00', '19:30'] }, 'horaires au format base : jour ISO, jours fermés absents');
+  } finally { restore(); }
+
+  // Agence déjà en base sans alias bot (import d'historique) : retrouvée par son nom, jamais recréée.
+  const byName = fakeDb({ select: (table, params) => (table === 'agences' ? (params.nom ? [{ id: 'ag-nom' }] : []) : undefined) });
+  restore = stubRouting(byName);
+  try {
+    const res = await rdvDb.syncAgencyToDb({ agency, guildId: 'g1', action: 'config' });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.ok(!byName.calls.some((c) => c[0] === 'insert' && c[1] === 'agences'), 'jamais recréée');
+    const upd = byName.calls.find((c) => c[0] === 'update' && c[1] === 'agences');
+    assert.deepEqual(upd[2], { id: 'eq.ag-nom' });
+    const sel = byName.calls.find((c) => c[0] === 'select' && c[1] === 'agences' && c[2].nom);
+    assert.equal(sel[2].nom, 'ilike.ALBI');
   } finally { restore(); }
 
   const missing = fakeDb({ select: (table) => (table === 'agences' ? [] : undefined) });
@@ -373,4 +387,14 @@ test('linkSdr : action d\'administration, indépendante de DB_WRITE_ENABLED', as
     const link = db.calls.find((c) => c[0] === 'update' && c[1] === 'users' && c[2].id === 'eq.u-42');
     assert.equal(link[3].discord_user_id, '777');
   } finally { restore(); }
+});
+
+test('opening_hours : conversion bot (jour JS, HH:MM-HH:MM) ↔ base (jour ISO, [ouverture, fermeture])', () => {
+  const { toDbOpeningHours, fromDbOpeningHours, DEFAULT_OPENING_HOURS } = require('../src/services/opening-hours');
+  assert.deepEqual(toDbOpeningHours({ 0: 'fermé', 1: '09:00-19:30', 6: '9:00-12:00' }), { 1: ['09:00', '19:30'], 6: ['09:00', '12:00'] });
+  assert.deepEqual(toDbOpeningHours({ 0: '10:00-16:00' }), { 7: ['10:00', '16:00'] }, 'dimanche JS 0 → ISO 7');
+  assert.equal(toDbOpeningHours(null), null);
+  assert.deepEqual(toDbOpeningHours({ 1: ['09:00', '19:30'] }), { 1: ['09:00', '19:30'] }, 'déjà au format base : inchangé');
+  assert.deepEqual(fromDbOpeningHours({ 1: ['09:00', '19:30'], 7: ['10:00', '16:00'] }), { 0: '10:00-16:00', 1: '09:00-19:30', 2: 'fermé', 3: 'fermé', 4: 'fermé', 5: 'fermé', 6: 'fermé' });
+  assert.deepEqual(fromDbOpeningHours(toDbOpeningHours(DEFAULT_OPENING_HOURS)), DEFAULT_OPENING_HOURS, 'aller-retour sans perte');
 });

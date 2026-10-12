@@ -49,6 +49,19 @@ Trois voies, toutes sur les mêmes tables :
    `referentiel_ecrire`, auditée dans `referentiel_audit`).
 3. Éditeur de tables Supabase, pour Licall en attendant son dashboard.
 
+## Historique importé
+
+Licall : le 12/10/2026, toutes les lignes des 22 onglets du classeur RDV
+(2 551 RDV, statut réel depuis la colonne « Etat », télé-confirmateur depuis
+« TC ») et la fiche SDR du classeur RH (`SDR LC 26`, 425 personnes) ont été
+chargés par `scripts/import-history.js --mode sql-stage --sheets-only` via la
+table de dépôt `bot_import_staging` puis `merge_<lot>.sql`. Les onglets sans
+canal Discord (MONTPELLIER, TOULOUSE ×2, TRÉGUNC, VELAUX) existent comme
+agences inactives. Détails et limites : `docs/passation-supabase.md` § 8.
+
+Kall Kall : l'historique vient du cron du dashboard ; seule une passe
+d'enrichissement (Etat, TC, fiche `SDR KK 26`) est prévue, en mode `stage`.
+
 ## Rejouer une évolution de structure
 
 Toute migration future du dashboard KallKall se rejoue sur Licall à
