@@ -10,7 +10,7 @@ Ce document est la porte d'entrée. Deux documents le complètent : [passation-s
 
 **Ce que fait le bot.** Un bot Discord unique (« KallKall Support ») sert deux sociétés, Licall et Kall Kall (Vroom Market), chacune sur son propre serveur Discord. Les prospecteurs (SDR) y posent des rendez-vous de mandat de vente de véhicule (« RDV MANDAT ») avec `/rdv add`, par agence automobile. Chaque RDV devient un événement Google Calendar sur le calendrier de l'agence et une ligne dans l'onglet Google Sheets de l'agence. Le bot envoie cinq fois par jour l'image de l'agenda de la semaine dans le canal Discord de chaque agence active. Une migration vers Supabase (une base par société) est codée, testée et **éteinte** ; les Sheets restent la référence en production.
 
-**Chiffres au 16/10/2026.** 60 agences environ configurées sur le volume de production (53 actives, le reste en pause), 2 serveurs Discord, 2 classeurs Sheets, 1 compte Google (`contact@licall.fr`), 1 service Railway, 3 commandes slash (`/rdv`, `/rdvadmin`, `/agenda`), 86 tests. Bot en ligne sans interruption depuis le 23/09 (dernier déploiement, commit `a58b9ab`).
+**Chiffres au 16/10/2026.** 60 agences environ configurées sur le volume de production (53 actives, le reste en pause), 2 serveurs Discord, 2 classeurs Sheets, 1 compte Google (`contact@licall.fr`), 1 service Railway, 3 commandes slash (`/rdv`, `/rdvadmin`, `/agenda`), 88 tests. Bot en ligne sans interruption depuis le 23/09 (dernier déploiement, commit `a58b9ab`).
 
 **Ce qui est fragile.** Le bot est en production permanente, utilisé en continu par les équipes. Un redéploiement coupe le bot 1 à 2 minutes. La configuration vivante des agences est sur le volume Railway, pas dans Git. Le compte Google est le seul accès aux calendriers des partenaires. Toute erreur de configuration d'agence se voit immédiatement (RDV orphelins, agenda non envoyé).
 
@@ -37,7 +37,7 @@ Ce document est la porte d'entrée. Deux documents le complètent : [passation-s
 
 | Dépôt | Contenu |
 |---|---|
-| `AlfredoKK/BOT-DISCORD` | **Ce bot.** Branche `main` = production (auto-déploiement Railway). PR #1 à #13 fusionnées les 22–23/09. PR #14 `feat/supabase-schema` **ouverte, non fusionnée** (couche Supabase + import + ce handoff). |
+| `AlfredoKK/BOT-DISCORD` | **Ce bot.** Branche `main` = production (auto-déploiement Railway). PR #1 à #13 fusionnées les 22–23/09. PR #14 `feat/supabase-schema` **ouverte** (couche Supabase + import + ce handoff). PR #15 `feat/agendas-agences-en-pause` **ouverte** (agendas aussi en pause ; commit également présent dans la PR #14, donc la seconde fusion ne crée pas de conflit). |
 | `AlfredoKK/kallkall-dashboard` | Dashboard Kall Kall. Sa base Supabase est partagée avec le bot ; ses 42 migrations sont la structure de référence. |
 | `AlfredoKK/kallkall-bot` | **Un autre bot**, en Python, qui répond aux mentions dans les canaux `questions-*` (FAQ). Même nom affiché « KallKall Support ». Projet Railway `radiant-inspiration`. Ne pas confondre. |
 
@@ -213,7 +213,7 @@ Objet `{ "<clé>": { … } }`, clé = nom d'agence en minuscules saisi dans `/rd
 | `max_rdv_heure` | config | Plafond horaire. Texte numérique toléré (`parseCapacityValue`). |
 | `max_rdv_jour` | **aucune commande** | Plafond journalier (édition manuelle seulement). |
 | `opening_hours` | horaires | `{ "0".."6": "HH:MM-HH:MM" | "fermé" }`, 0 = dimanche. Absent → lun-sam 09:00-19:30. |
-| `paused` | pause / play | Bloque `/rdv add`, `/rdv dom` et l'agenda automatique. |
+| `paused` | pause / play | Bloque `/rdv add` et `/rdv dom`. Depuis la PR #15 (16/10), **ne bloque plus** l'agenda automatique ; en production avant sa fusion, la pause coupait aussi les agendas. |
 | `dom_rdv_enabled` | **aucune commande** | Autorise `/rdv dom` (une seule agence : Saint-Cannat). |
 | `granularite`, `timezone` | config (constantes) | Non utilisés par la logique. |
 | `societe` | **aucune commande** | Routage société explicite (prioritaire). |
@@ -315,14 +315,14 @@ Les équipes ajoutent à droite deux colonnes hors bot, en position variable : *
 ## 6. Agendas automatiques (`scheduler.js`)
 
 - Un `setInterval` de 60 s ; passage à **08:00, 12:00, 15:00, 18:00, 21:00 heure de Paris** (`SEND_HOURS` `:13`), uniquement à la minute 00.
-- Pour chaque agence **non en pause** : vérification du canal et des 3 permissions, puis deux images (semaine S et S+1) ; 1,5 s entre les deux, **5 s entre agences** → un passage dure ≈ 10 min pour 53 agences.
+- Pour **chaque agence du fichier, pause comprise** (PR #15 du 16/10 : `listAgendaAgencies`, `scheduler.js`) : vérification du canal et des 3 permissions, puis deux images (semaine S et S+1) ; 1,5 s entre les deux, **5 s entre agences** → un passage dure ≈ 10 min pour 60 agences. Avant la PR #15, les agences en pause étaient exclues (`filter(!a.paused)`).
 - Échec d'une agence → avis « Agenda automatique non envoyé » ; ≥ 3 agences ou ≥ 30 % → incident `agendas-en-échec`.
 - Passage de 21 h : archive Drive de l'image S si configurée (inactif aujourd'hui).
-- **Aucune variable ne coupe les agendas** : mettre l'agence en pause, ou modifier `SEND_HOURS`.
+- **Aucune variable ne coupe les agendas** et la pause ne les coupe plus : pour arrêter l'envoi à une agence, `/rdvadmin deconfig` (retire l'agence du canal) ou retirer la permission « Envoyer des messages » au bot dans le canal ; pour tout le monde, modifier `SEND_HOURS`.
 - Un passage est relancé au démarrage : un redéploiement à hh:00 pile peut envoyer deux fois.
 - Les 5 passages du 12/10 au 16/10 ont tous fini avec 0 échec (logs `Envoi terminé pour toutes les agences`).
 
-**Diagnostic type « l'agence X ne reçoit plus ses agendas » (fait le 16/10).** Dans 100 % des cas remontés ce jour-là, l'agence était en pause (`/rdvadmin pause` par un Team Lead) ou l'image était bien dans le canal. Méthode : logs Railway filtre `agences actives à envoyer` et `Agenda S envoyé pour <NOM>` à l'heure du passage ; filtre `mise en pause` / `réactivée` pour l'historique des pauses ; puis les 5 permissions du bot dans le canal. Réactivation : `/rdvadmin play` dans le canal.
+**Diagnostic type « l'agence X ne reçoit plus ses agendas » (fait le 16/10).** Dans 100 % des cas remontés ce jour-là, l'agence était en pause (`/rdvadmin pause` par un Team Lead) ou l'image était bien dans le canal. C'est ce qui a conduit à la PR #15 : les Team Leads utilisent la pause pour « pas de RDV » et ne veulent pas perdre les agendas. Méthode : logs Railway filtre `agences à envoyer` et `Agenda S envoyé pour <NOM>` à l'heure du passage ; puis les 3 permissions du bot dans le canal ; puis `/rdvadmin verifier` (calendrier accessible).
 
 ---
 
@@ -373,7 +373,7 @@ Les équipes ajoutent à droite deux colonnes hors bot, en position variable : *
 
 ### 10.1 Déployer une modification
 
-1. Branche depuis `main`, commits, `npm test` (86 verts attendus), push, `gh pr create`.
+1. Branche depuis `main`, commits, `npm test` (54 verts sur `main`, 88 sur la branche Supabase), push, `gh pr create`.
 2. **Alfredo fusionne** la PR sur GitHub. Ne jamais pousser directement sur `main`.
 3. Railway redéploie en ≈ 2 min ; coupure de 1 à 2 min (« L'application ne répond plus » côté SDR → réessayer). Choisir un creux, **hors 08:00 / 12:00 / 15:00 / 18:00 / 21:00** (passage d'agendas).
 4. Vérifier : logs (`connecté`, `[Data] Dossier de données: /data | agences: ok | token Google: ok`), `/health` (commit déployé, `googleAuth:true`), `/rdvadmin status`. Si une définition de commande a changé : « Cette commande est obsolète » s'affiche une fois par utilisateur (cache Discord, Ctrl+R) ; propagation globale jusqu'à 1 h.
@@ -389,13 +389,13 @@ Les équipes ajoutent à droite deux colonnes hors bot, en position variable : *
 
 ### 10.3 Pause, reprise, horaires
 
-`/rdvadmin pause` / `play` / `horaires` dans le canal, par un Admin ou Team Lead. Effet immédiat et persistant. La pause coupe les RDV **et** les agendas automatiques. Pour limiter ponctuellement sans couper : poser un événement `N RDV/H`, `PAS DE RDV` ou `STOP RDV` sur le calendrier.
+`/rdvadmin pause` / `play` / `horaires` dans le canal, par un Admin ou Team Lead. Effet immédiat et persistant. La pause coupe la prise de RDV ; depuis la PR #15, les agendas automatiques continuent. Pour limiter ponctuellement : poser un événement `N RDV/H`, `PAS DE RDV` ou `STOP RDV` sur le calendrier.
 
 ### 10.4 Diagnostics courants
 
 | Symptôme | Où regarder | Cause habituelle |
 |---|---|---|
-| « L'agence ne reçoit plus ses agendas » | Logs `agences actives à envoyer`, `Agenda S envoyé pour`, `mise en pause` | Agence en pause (16/10 : 7 cas sur 10), ou image bien présente mais non vue. Sinon permissions du canal. |
+| « L'agence ne reçoit plus ses agendas » | Logs `agences à envoyer`, `Agenda S envoyé pour`, avis « Agenda automatique non envoyé » | Avant la PR #15 : agence en pause (16/10 : 7 cas sur 10). Sinon : image présente mais non vue, permissions du canal, calendrier inaccessible. |
 | « Le bot refuse : créneau complet 1/1 » alors que config > 1 | Calendrier de l'agence | Marqueur `1 RDV/H` posé par l'équipe ; ou `max_rdv_heure` absent/invalide → défaut 1. |
 | « Requested entity was not found » / RDV dans Calendar mais pas dans Sheets | Avis dans `#alertes-bot`, `/rdvadmin verifier` | Onglet `sheet_name` inexistant ou classeur non partagé. Depuis la PR #6, `/rdv add` vérifie l'onglet avant Calendar. |
 | « Commande réservée aux administrateurs » | Logs `Refus de permission` (rôles listés) | Rôle non reconnu ; ajouter via `ADMIN_ROLE_NAME` ou renommer. |
@@ -444,7 +444,8 @@ Résumé ; le détail est dans [passation-supabase.md](passation-supabase.md).
 | 23/09 | #13 | Avis d'exploitation courts dans `#alertes-bot`. **Dernier déploiement en production.** |
 | 12/10 | #14 (ouverte) | Schéma Supabase, double écriture éteinte, import Licall, docs. |
 | 12/10 | — | Bot FAQ Python : IP bannie par Cloudflare, déplacé en région EU (autre projet Railway). |
-| 16/10 | — | Diagnostic agendas (agences en pause) ; ce handoff. |
+| 16/10 | #15 (ouverte) | Agendas envoyés aussi aux agences en pause (`listAgendaAgencies`), message de `/rdvadmin pause` adapté, test. Même commit porté sur la branche de la PR #14. |
+| 16/10 | — | Diagnostic agendas ; ce handoff. |
 
 ---
 
@@ -485,7 +486,7 @@ Classés par risque pour la production.
 3. Réautoriser Google avec le scope `gmail.send` pour activer l'e-mail d'alerte (optionnel : Discord suffit selon Alfredo).
 4. Surveillance externe de `/health` (uptimerobot ou équivalent).
 5. Archive Drive de 21 h : fournir le compte de service si souhaité.
-6. Agendas pendant la pause : les Team Leads utilisent la pause pour « pas de RDV » et perdent les agendas ; décision produit à prendre (une ligne dans `scheduler.js:194`).
+6. Fusionner la PR #15 (agendas aussi pour les agences en pause) ; déployer hors des heures de passage.
 7. Buchelay : les RDV du bot ne restent pas verts dans Calendar (cause côté Google/équipe, non traité).
 8. Albi, Toulouse St Orens : onglet manquant / calendrier non partagé, à corriger avant réactivation.
 9. `/rdvadmin export` (sauvegarde du `agencies.json` du volume) : proposé, jamais fait. Utile avant toute opération sur le volume.
