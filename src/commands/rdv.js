@@ -25,6 +25,61 @@ const {
 } = require('../utils/rdv-helpers');
 const { verifySheetTab, brokenSheetConfigMessage } = require('../services/agency-check');
 const { notifyOps } = require('../services/alerts');
+const rdvDb = require('../services/rdv-db');
+
+// ── Double écriture Sheets + base (src/services/rdv-db.js) ──
+// Chaque action écrit aussi dans la base Supabase de la société de l'agence
+// quand DB_WRITE_ENABLED=true. Jamais bloquant : un échec base est journalisé,
+// signalé dans le canal d'alertes et affiché dans l'embed.
+
+function actorOf(interaction) {
+  return {
+    discordUserId: interaction.user?.id || null,
+    displayName: interaction.member?.displayName || interaction.user?.globalName || interaction.user?.username || '',
+  };
+}
+
+function dbContext(interaction, agency, extra = {}) {
+  return { agency, guildId: interaction.guildId, actor: actorOf(interaction), client: interaction.client, ...extra };
+}
+
+/** Champ d'embed « Base » : absent quand la double écriture est coupée. */
+function dbField(result) {
+  if (!result || result.skipped) return null;
+  const name = result.label ? `Base ${result.label}` : 'Base';
+  return { name, value: result.ok ? 'Synchronisé' : `Erreur: ${result.error}`, inline: false };
+}
+
+function sheetsOutcome(sheetStatus) {
+  const ok = sheetStatus === 'Synchronisé';
+  return { sheetsOk: ok, sheetsError: ok ? null : sheetStatus };
+}
+
+/** Heure RDV et fin depuis l'événement Calendar (un RDV DOM démarre 15 min avant sur l'agenda). */
+function eventTimes(eventData, isDom) {
+  const calStart = eventData?.start?.dateTime ? new Date(eventData.start.dateTime) : null;
+  const calEnd = eventData?.end?.dateTime ? new Date(eventData.end.dateTime) : null;
+  const start = calStart && isDom ? new Date(calStart.getTime() + DOM_RDV_BUFFER_MINUTES * 60000) : calStart;
+  return { start, end: calEnd };
+}
+
+/** Données d'un RDV existant (titre Calendar) pour un rattrapage en base. */
+function eventPayload(eventData) {
+  const details = parseManagedRdvEvent(eventData || {});
+  const isDom = isEventDomRdv(eventData);
+  const { start, end } = eventTimes(eventData, isDom);
+  return {
+    typeRdv: isDom ? 'mandat_dom' : 'mandat',
+    start,
+    end,
+    nomClient: details.nomClient,
+    telephone: details.telephone,
+    vehicule: { marque: details.marque, modele: details.modele, annee: details.annee, kilometrage: details.kilometrage, prix: details.prix },
+    liens: details.liens,
+    commentaire: details.commentaire,
+    adresse: details.adresse,
+  };
+}
 
 // Avis court dans le canal d'alertes pour un échec fonctionnel (jamais bloquant).
 function notice(interaction, kind, message, extra = {}) {
@@ -263,6 +318,20 @@ async function handleAdd(interaction) {
     notice(interaction, 'Sheets non écrit', `RDV créé dans Calendar mais la ligne Sheets a échoué : ${sheetErr.message}`, { agency, eventId, level: 'error', conseil: 'La ligne est à ajouter à la main ou via un rattrapage. Vérifier l\'onglet avec /rdvadmin verifier.' });
   }
 
+  const dbResult = await rdvDb.onRdvCreated(dbContext(interaction, agency, {
+    eventId,
+    start: dateTime,
+    end: endTime,
+    typeRdv: 'mandat',
+    nomClient,
+    telephone,
+    vehicule: { marque, modele, annee, kilometrage, prix },
+    liens,
+    commentaire,
+    confirmation: rdvDb.sheetConfToDb(sheetConfType),
+    ...sheetsOutcome(sheetStatus),
+  }));
+
   const calLink = getCalendarLink(eventId, agency.calendar_id);
 
   const embed = buildRdvEmbed('RDV créé', 0x0B8043, [
@@ -279,6 +348,7 @@ async function handleAdd(interaction) {
     { name: 'Notes', value: commentaire || 'Aucune', inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
     { name: 'Sheets', value: sheetStatus, inline: false },
+    ...[dbField(dbResult)].filter(Boolean),
   ]);
 
   if (sheetConfType) {
@@ -375,6 +445,21 @@ async function handleDom(interaction) {
     notice(interaction, 'Sheets non écrit', `RDV DOM créé dans Calendar mais la ligne Sheets a échoué : ${sheetErr.message}`, { agency, eventId, level: 'error' });
   }
 
+  const dbResult = await rdvDb.onRdvCreated(dbContext(interaction, agency, {
+    eventId,
+    start: rdvTime,
+    end: endTime,
+    typeRdv: 'mandat_dom',
+    nomClient,
+    telephone,
+    vehicule: { marque, modele, annee, kilometrage, prix },
+    liens,
+    commentaire,
+    adresse,
+    confirmation: rdvDb.sheetConfToDb(sheetConfType),
+    ...sheetsOutcome(sheetStatus),
+  }));
+
   const calLink = getCalendarLink(eventId, agency.calendar_id);
 
   const embed = buildRdvEmbed('RDV DOM créé', 0x8E24AA, [
@@ -393,6 +478,7 @@ async function handleDom(interaction) {
     { name: 'Notes', value: commentaire || 'Aucune', inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
     { name: 'Sheets', value: sheetStatus, inline: false },
+    ...[dbField(dbResult)].filter(Boolean),
   ]);
 
   if (sheetConfType) embed.setFooter({ text: sheetConfType });
@@ -447,6 +533,8 @@ async function handleAnnuler(interaction) {
 
   // Update sheet
   let sheetRow = null;
+  let sheetsOk = false;
+  let sheetsError = 'ligne introuvable dans Sheets';
   try {
     const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
     const found = findSheetRowByEventId(rows, eventId, eventData);
@@ -455,11 +543,16 @@ async function handleAnnuler(interaction) {
       found.row[COL.STATUT] = 'ANNULÉ';
       found.row[COL.UPDATED_AT] = timestamp();
       await sheets.updateRow(agency.spreadsheet_id, found.index, found.row, agency.sheet_name);
+      sheetsOk = true;
+      sheetsError = null;
     }
   } catch (e) {
     console.error(`[ANNULER] Sheet failed:`, e.message);
+    sheetsError = e.message;
     notice(interaction, 'Sheets non mis à jour', `Annulation faite dans Calendar mais pas dans Sheets : ${e.message}`, { agency, eventId, level: 'error' });
   }
+
+  const dbResult = await rdvDb.onRdvStatus(dbContext(interaction, agency, { eventId, statut: 'annule', ...eventPayload(eventData), sheetsOk, sheetsError }));
 
   const currentDetails = parseManagedRdvEvent(eventData);
   const startDt = eventData.start?.dateTime ? new Date(eventData.start.dateTime) : null;
@@ -475,6 +568,7 @@ async function handleAnnuler(interaction) {
     { name: 'Statut', value: 'ANNULÉ' },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
+    ...[dbField(dbResult)].filter(Boolean),
   ]);
 
   await interaction.editReply({ embeds: [embed] });
@@ -519,6 +613,8 @@ async function handleVendu(interaction) {
 
   // Update sheet
   let sheetRow = null;
+  let sheetsOk = false;
+  let sheetsError = 'ligne introuvable dans Sheets';
   try {
     const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
     const found = findSheetRowByEventId(rows, eventId, eventData);
@@ -527,11 +623,16 @@ async function handleVendu(interaction) {
       found.row[COL.STATUT] = 'VENDU';
       found.row[COL.UPDATED_AT] = timestamp();
       await sheets.updateRow(agency.spreadsheet_id, found.index, found.row, agency.sheet_name);
+      sheetsOk = true;
+      sheetsError = null;
     }
   } catch (e) {
     console.error(`[VENDU] Sheet failed:`, e.message);
+    sheetsError = e.message;
     notice(interaction, 'Sheets non mis à jour', `Statut VENDU posé dans Calendar mais pas dans Sheets : ${e.message}`, { agency, eventId, level: 'error' });
   }
+
+  const dbResult = await rdvDb.onRdvStatus(dbContext(interaction, agency, { eventId, statut: 'vendu', ...eventPayload(eventData), sheetsOk, sheetsError }));
 
   const currentDetails = parseManagedRdvEvent(eventData);
   const startDt = eventData.start?.dateTime ? new Date(eventData.start.dateTime) : null;
@@ -547,6 +648,7 @@ async function handleVendu(interaction) {
     { name: 'Statut', value: 'VENDU' },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
+    ...[dbField(dbResult)].filter(Boolean),
   ]);
 
   await interaction.editReply({ embeds: [embed] });
@@ -592,17 +694,24 @@ async function handleSupprimer(interaction) {
     return interaction.editReply(`Erreur suppression calendrier: ${calErr.message}`);
   }
 
+  let sheetsOk = false;
+  let sheetsError = 'ligne introuvable dans Sheets';
   try {
     const rows = await sheets.getAllRows(agency.spreadsheet_id, agency.sheet_name);
     const found = findSheetRowByEventId(rows, eventId, eventData);
     if (found) {
       await sheets.deleteRow(agency.spreadsheet_id, found.index, agency.sheet_name);
       console.log(`[SUPPRIMER] Sheet row ${found.index} deleted`);
+      sheetsOk = true;
+      sheetsError = null;
     }
   } catch (sheetErr) {
     console.error(`[SUPPRIMER] Sheet delete failed:`, sheetErr.message);
+    sheetsError = sheetErr.message;
     notice(interaction, 'Sheets non mis à jour', `Événement supprimé dans Calendar mais la ligne Sheets n\'a pas pu être supprimée : ${sheetErr.message}`, { agency, eventId, level: 'error' });
   }
+
+  const dbResult = await rdvDb.onRdvDeleted(dbContext(interaction, agency, { eventId, sheetsOk, sheetsError }));
 
   const currentDetails = eventData ? parseManagedRdvEvent(eventData) : null;
   const startDt = eventData?.start?.dateTime ? new Date(eventData.start.dateTime) : null;
@@ -616,6 +725,7 @@ async function handleSupprimer(interaction) {
     { name: 'Véhicule', value: vehicleLabel(sheetRow, currentDetails) },
     { name: 'Statut', value: 'SUPPRIMÉ DÉFINITIVEMENT' },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
+    ...[dbField(dbResult)].filter(Boolean),
   ]);
 
   await interaction.editReply({ embeds: [embed] });
@@ -677,6 +787,14 @@ async function handleConf(interaction) {
     // Non-fatal: sheet already updated, just warn in reply
   }
 
+  const dbResult = await rdvDb.onRdvConfirmation(dbContext(interaction, agency, {
+    eventId,
+    confirmation: confStatut === 'CONF' ? 'conf' : 'non_conf',
+    ...eventPayload(eventData),
+    sheetsOk: true,
+    sheetsError: null,
+  }));
+
   const currentDetails = parseManagedRdvEvent(eventData);
   const startDt = eventData.start?.dateTime ? new Date(eventData.start.dateTime) : null;
   const calLink = getCalendarLink(eventId, agency.calendar_id);
@@ -692,6 +810,7 @@ async function handleConf(interaction) {
     { name: 'Confirmation', value: confStatut },
     { name: 'ID Événement', value: `\`${eventId}\``, inline: false },
     { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
+    ...[dbField(dbResult)].filter(Boolean),
   ]);
 
   await interaction.editReply({ embeds: [embed] });
@@ -859,8 +978,32 @@ async function handleModifier(interaction) {
   } catch (sheetErr) {
     console.error(`[MODIFIER] Sheet update failed:`, sheetErr.message);
     notice(interaction, 'Sheets non mis à jour', `Modification faite dans Calendar mais pas dans Sheets : ${sheetErr.message}`, { agency, eventId, level: 'error' });
+    await rdvDb.onRdvModified(dbContext(interaction, agency, {
+      eventId, start: newDateTime, end: calEnd, typeRdv: isDom ? 'mandat_dom' : 'mandat',
+      nomClient: newNom, telephone: newTel, vehicule: { marque: newMarque, modele: newModele, annee: newAnnee, kilometrage: newKm, prix: newPrix },
+      liens: newLiens, commentaire: newCommentaire, adresse: currentDetails.adresse,
+      rebook: isRebook, confirmation: isRebook ? rdvDb.sheetConfToDb(sheetConfType) : undefined,
+      sheetsOk: false, sheetsError: sheetErr.message,
+    }));
     return interaction.editReply(`Le calendrier a été mis à jour mais le Sheets a échoué sur l'ID \`${eventId}\`. Vérifie la ligne avant de refaire une modification.`);
   }
+
+  const dbResult = await rdvDb.onRdvModified(dbContext(interaction, agency, {
+    eventId,
+    start: newDateTime,
+    end: calEnd,
+    typeRdv: isDom ? 'mandat_dom' : 'mandat',
+    nomClient: newNom,
+    telephone: newTel,
+    vehicule: { marque: newMarque, modele: newModele, annee: newAnnee, kilometrage: newKm, prix: newPrix },
+    liens: newLiens,
+    commentaire: newCommentaire,
+    adresse: currentDetails.adresse,
+    rebook: isRebook,
+    confirmation: isRebook ? rdvDb.sheetConfToDb(sheetConfType) : undefined,
+    sheetsOk: true,
+    sheetsError: null,
+  }));
 
   const calLink = getCalendarLink(eventId, agency.calendar_id);
   const embed = buildRdvEmbed(
@@ -881,6 +1024,7 @@ async function handleModifier(interaction) {
       { name: 'Lien', value: newLiens || 'Aucun', inline: false },
       { name: 'Notes', value: newCommentaire || 'Aucune', inline: false },
       { name: 'Voir sur Calendar', value: `[Ouvrir](${calLink})`, inline: false },
+      ...[dbField(dbResult)].filter(Boolean),
     ]
   );
 
