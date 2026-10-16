@@ -177,6 +177,16 @@ async function sendAgendaForAgency(client, agencyKey, agency, sharedColorMap, op
 }
 
 /**
+ * Agences qui reçoivent l'agenda automatique : toutes celles du fichier,
+ * y compris celles en pause (décision du 16/10/2026 : la pause bloque la
+ * prise de RDV, pas l'information de l'équipe). Une agence sans channel_id
+ * est conservée ici et signalée par sendAgendaForAgency.
+ */
+function listAgendaAgencies(agencies) {
+  return Object.entries(agencies || {});
+}
+
+/**
  * Check if it's time to send and send for all agencies
  */
 async function checkAndSend(client) {
@@ -190,7 +200,8 @@ async function checkAndSend(client) {
   console.log(`[Scheduler] Envoi automatique déclenché à ${hours}:00 (Paris)`);
 
   const agencies = loadAgencies();
-  const entries = Object.entries(agencies).filter(([, a]) => !a.paused); // skip paused agencies
+  const entries = listAgendaAgencies(agencies);
+  const enPause = entries.filter(([, a]) => a.paused).length;
 
   // Pre-fetch color map once (same for all agencies)
   let sharedColorMap = null;
@@ -200,7 +211,7 @@ async function checkAndSend(client) {
     console.error('[Scheduler] Could not fetch color map:', e.message);
   }
 
-  console.log(`[Scheduler] ${entries.length} agences actives à envoyer`);
+  console.log(`[Scheduler] ${entries.length} agences à envoyer (dont ${enPause} en pause)`);
   const failures = [];
   for (const [key, agency] of entries) {
     let result;
@@ -300,4 +311,5 @@ module.exports = {
   getLastRunAt,
   getLastCheckAt,
   shouldAlertForFailures,
+  listAgendaAgencies,
 };

@@ -383,7 +383,7 @@ async function handlePause(interaction) {
   saveAgencies(agencies);
   console.log(`[PAUSE] Agence ${agency.name} mise en pause par ${interaction.user?.tag || interaction.user?.id}`);
 
-  await interaction.editReply(`⏸️ L'agence **${agency.name}** est maintenant **en pause**. Plus aucun RDV ne sera accepté jusqu'à \`/rdvadmin play\`.`);
+  await interaction.editReply(`⏸️ L'agence **${agency.name}** est maintenant **en pause**. Plus aucun RDV ne sera accepté jusqu'à \`/rdvadmin play\`. Les agendas automatiques continuent d'être envoyés.`);
 }
 
 async function handlePlay(interaction) {
