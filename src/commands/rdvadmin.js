@@ -430,7 +430,7 @@ async function handlePause(interaction) {
   console.log(`[PAUSE] Agence ${agency.name} mise en pause par ${interaction.user?.tag || interaction.user?.id}`);
 
   const dbNote = await mirrorAgency(interaction, agency.key, agencies[agency.key], 'pause');
-  await interaction.editReply(`⏸️ L'agence **${agency.name}** est maintenant **en pause**. Plus aucun RDV ne sera accepté jusqu'à \`/rdvadmin play\`.${dbNote}`);
+  await interaction.editReply(`⏸️ L'agence **${agency.name}** est maintenant **en pause**. Plus aucun RDV ne sera accepté jusqu'à \`/rdvadmin play\`. Les agendas automatiques continuent d'être envoyés.${dbNote}`);
 }
 
 async function handlePlay(interaction) {
